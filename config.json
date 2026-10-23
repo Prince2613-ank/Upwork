@@ -1,0 +1,14 @@
+{
+  "date_range_months": 1,
+  "date_range_days": 0,
+  "results_per_page": 50,
+  "sort": "most_recent",
+  "payment_verified": true,
+  "delay_between_jobs_seconds": 1.4,
+  "delay_between_pages_seconds": 2.5,
+  "max_retries": 3,
+  "output_directory": "./output",
+  "cdp_url": "http://127.0.0.1:9222",
+  "headless": false,
+  "default_mode": "test_3"
+}

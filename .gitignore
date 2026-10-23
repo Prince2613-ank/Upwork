@@ -1,0 +1,50 @@
+# Environment variables and secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.pytest_tmp/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Chrome / Playwright browser sessions & profiles
+browser_profiles/
+chrome_user_data/
+chrome-profile*/
+playwright-report/
+test-results/
+
+# Databases, logs & screenshots
+*.db
+*.sqlite
+*.sqlite3
+*.log
+*.png
+
+# Scraper output directory and backups (multi-GB data)
+output/
+output_backup*/
+
+# Temporary scrape dumps and large HTML reports (>100MB files trigger GitHub rejection)
+dump*.html
+dump*.txt
+test_comb.html
+*.html.bak
+upwork_*.html
+
+# Scraped CSV exports in root
+jobs_*.csv
+
+# Data artifacts (tracked via checkpoints/exports if needed)
+data/checkpoints/*.tmp
+data/raw/

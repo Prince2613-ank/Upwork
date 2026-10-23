@@ -1,0 +1,22 @@
+{
+  "name": "flodata-upwork-intelligence",
+  "version": "2.0.0",
+  "description": "Daily Automated Upwork Intelligence Scraper & Analytics Dashboard",
+  "main": "run_daily_system.py",
+  "scripts": {
+    "start": "python run_daily_system.py",
+    "report": "python generate_standalone_report.py --db output/database_today.db --output output/upwork_today_report.html",
+    "status": "python -c \"import sqlite3; conn=sqlite3.connect('output/database_today.db'); print('Today jobs in DB:', conn.execute('SELECT count(*) FROM jobs').fetchone()[0]); conn.close()\"",
+    "dashboard": "python -m uvicorn collector.dashboard.app:app --host 0.0.0.0 --port 8000"
+  },
+  "keywords": [
+    "upwork",
+    "scraper",
+    "intelligence",
+    "daily",
+    "automation",
+    "analytics"
+  ],
+  "author": "Flodata Analytics",
+  "license": "ISC"
+}

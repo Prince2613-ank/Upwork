@@ -1,0 +1,53 @@
+job_id,job_url,title,posted_at,posted_raw,budget_type,budget_amount,min_hourly,max_hourly,currency,experience_level,duration,skills,category,proposals,client_location,client_payment_verified,client_rating,client_reviews_count,client_total_spent,client_jobs_posted,client_total_hires,client_hire_rate,client_member_since,history_items_count,full_description,history_reviews_summary
+~01mock0000abcdef,https://www.upwork.com/jobs/~01mock0000abcdef,Dutch -> English Comic Translation & Manual Lettering - 20 Pages [Batch 1],2026-09-20T13:30:00+00:00,Posted -259 minutes ago,fixed-price,25.0,,,USD,Intermediate,1 to 3 months,"Dutch to English Translation, Adobe Illustrator, Lettering",,,Netherlands,True,5.0,18,$3.5K+ spent,28,,75.0,"Jan 15, 2021",3,"We are seeking a seasoned data extraction and market intelligence engineer to design and operate our competitive intelligence pipelines. Flodata Analytics tracks procurement shifts, public vendor transactions, and marketplace demand.
+
+In this role, you will be responsible for:
+- Constructing resilient data harvesting workflows with automated schema validation.
+- Normalizing unstructured client requirements, job histories, and feedback records.
+- Ensuring complete field capture without truncation, especially for nested feedback items.
+- Establishing checkpointing and incremental synchronization so collection jobs can resume safely.
+
+Requirements:
+- Proven production experience in Python, Playwright/Puppeteer, and structured data serialization.
+- Familiarity with robust JSON schema validation and export workflows.
+- Strong commitment to data completeness and code quality.","[May 2024 - Jun 2024] Past Milestone Assignment #1: Flodata and their engineering team did an extraordinary job on our enterprise ingestion pipeline. They delivered fully un-truncated data records, caught complex edge cases in our schemas, and maintained exceptional communication throughout. Highly recommended for any serious data engineering engagement! | [May 2024 - Jun 2024] Past Milestone Assignment #2: Outstanding work! Delivered clean, thoroughly tested Python modules with full test coverage and automated checkpointing. The documentation was crystal clear and the deliverables exceeded our expectations. | [May 2024 - Jun 2024] Past Milestone Assignment #3: Exceptional attention to detail. Captured the entire history of records without skipping any nested feedback. Communication was timely, professional, and proactive. Will definitely hire again."
+~01mock0001abcdef,https://www.upwork.com/jobs/~01mock0001abcdef,Senior Python & Cloud Data Pipeline Engineer [Batch 2],2026-09-20T11:30:00+00:00,Posted -139 minutes ago,hourly,77.5,65.0,90.0,USD,Intermediate,1 to 3 months,"Python, AWS, Snowflake, PostgreSQL, ETL",,,United States,True,4.98,18,$140K+ spent,28,,75.0,"Jan 15, 2021",3,"We are expanding our B2B intelligence platform and need a dedicated specialist to collect, structure, and synthesize outsourcing transaction records.
+
+The primary objective is analyzing enterprise client purchasing habits, identifying recurring technology acquisitions, and highlighting high-potential accounts for business development.
+
+Responsibilities:
+1. Extract complete job specifications, budget terms, and multi-year client feedback.
+2. Maintain strict data integrity with zero data loss on extended text fields.
+3. Validate datasets against strict quality criteria before delivering to analytics teams.
+
+Please provide examples of previous structured data collection projects.","[May 2024 - Jun 2024] Past Milestone Assignment #1: Outstanding work! Delivered clean, thoroughly tested Python modules with full test coverage and automated checkpointing. The documentation was crystal clear and the deliverables exceeded our expectations. | [May 2024 - Jun 2024] Past Milestone Assignment #2: Exceptional attention to detail. Captured the entire history of records without skipping any nested feedback. Communication was timely, professional, and proactive. Will definitely hire again. | [May 2024 - Jun 2024] Past Milestone Assignment #3: Great experience working with this freelancer. They quickly understood our market intelligence requirements and structured the exact data model we needed for Claude analysis."
+~01mock0002abcdef,https://www.upwork.com/jobs/~01mock0002abcdef,Market Intelligence Scraping & Data Extraction Pipeline [Batch 3],2026-09-20T09:30:00+00:00,Posted -19 minutes ago,fixed-price,500.0,,,USD,Intermediate,1 to 3 months,"Python, Playwright, Web Scraping, Data Normalization",,,United Kingdom,True,5.0,18,$52K+ spent,28,,75.0,"Jan 15, 2021",3,"Looking for a skilled specialist to manage our market analysis workflow. We collect public marketplace listings to assess tech stack migration patterns.
+
+Every record must include:
+- Full job description text (no summaries or truncated previews).
+- Complete About Client metrics (spend, rating, total jobs, hire rates).
+- Historical contract reviews un-truncated for sentiment and vendor name extraction.
+
+All work must be delivered as validated JSON and accompanying CSV exports with verifiable provenance.","[May 2024 - Jun 2024] Past Milestone Assignment #1: Exceptional attention to detail. Captured the entire history of records without skipping any nested feedback. Communication was timely, professional, and proactive. Will definitely hire again. | [May 2024 - Jun 2024] Past Milestone Assignment #2: Great experience working with this freelancer. They quickly understood our market intelligence requirements and structured the exact data model we needed for Claude analysis. | [May 2024 - Jun 2024] Past Milestone Assignment #3: Delivered ahead of schedule. The code was modular, clean, and adhered strictly to modern coding standards. 5 stars all around!"
+~01mock0003abcdef,https://www.upwork.com/jobs/~01mock0003abcdef,Full Stack Next.js & Supabase Enterprise Portal [Batch 4],2026-09-20T07:30:00+00:00,Posted 1 hours ago,hourly,57.5,45.0,70.0,USD,Intermediate,1 to 3 months,"React, Next.js, TypeScript, Supabase, Tailwind CSS",,,Canada,True,4.92,18,$85K+ spent,28,,75.0,"Jan 15, 2021",3,"We are seeking a seasoned data extraction and market intelligence engineer to design and operate our competitive intelligence pipelines. Flodata Analytics tracks procurement shifts, public vendor transactions, and marketplace demand.
+
+In this role, you will be responsible for:
+- Constructing resilient data harvesting workflows with automated schema validation.
+- Normalizing unstructured client requirements, job histories, and feedback records.
+- Ensuring complete field capture without truncation, especially for nested feedback items.
+- Establishing checkpointing and incremental synchronization so collection jobs can resume safely.
+
+Requirements:
+- Proven production experience in Python, Playwright/Puppeteer, and structured data serialization.
+- Familiarity with robust JSON schema validation and export workflows.
+- Strong commitment to data completeness and code quality.","[May 2024 - Jun 2024] Past Milestone Assignment #1: Great experience working with this freelancer. They quickly understood our market intelligence requirements and structured the exact data model we needed for Claude analysis. | [May 2024 - Jun 2024] Past Milestone Assignment #2: Delivered ahead of schedule. The code was modular, clean, and adhered strictly to modern coding standards. 5 stars all around! | [May 2024 - Jun 2024] Past Milestone Assignment #3: Flodata and their engineering team did an extraordinary job on our enterprise ingestion pipeline. They delivered fully un-truncated data records, caught complex edge cases in our schemas, and maintained exceptional communication throughout. Highly recommended for any serious data engineering engagement!"
+~01mock0004abcdef,https://www.upwork.com/jobs/~01mock0004abcdef,Healthcare B2B Lead Generation & Account Intelligence [Batch 5],2026-09-20T05:30:00+00:00,Posted 3 hours ago,fixed-price,350.0,,,USD,Intermediate,1 to 3 months,"Lead Generation, Market Research, Apollo.io, Data Enrichment",,,Saudi Arabia,True,5.0,18,$28K+ spent,28,,75.0,"Jan 15, 2021",3,"We are expanding our B2B intelligence platform and need a dedicated specialist to collect, structure, and synthesize outsourcing transaction records.
+
+The primary objective is analyzing enterprise client purchasing habits, identifying recurring technology acquisitions, and highlighting high-potential accounts for business development.
+
+Responsibilities:
+1. Extract complete job specifications, budget terms, and multi-year client feedback.
+2. Maintain strict data integrity with zero data loss on extended text fields.
+3. Validate datasets against strict quality criteria before delivering to analytics teams.
+
+Please provide examples of previous structured data collection projects.","[May 2024 - Jun 2024] Past Milestone Assignment #1: Delivered ahead of schedule. The code was modular, clean, and adhered strictly to modern coding standards. 5 stars all around! | [May 2024 - Jun 2024] Past Milestone Assignment #2: Flodata and their engineering team did an extraordinary job on our enterprise ingestion pipeline. They delivered fully un-truncated data records, caught complex edge cases in our schemas, and maintained exceptional communication throughout. Highly recommended for any serious data engineering engagement! | [May 2024 - Jun 2024] Past Milestone Assignment #3: Outstanding work! Delivered clean, thoroughly tested Python modules with full test coverage and automated checkpointing. The documentation was crystal clear and the deliverables exceeded our expectations."

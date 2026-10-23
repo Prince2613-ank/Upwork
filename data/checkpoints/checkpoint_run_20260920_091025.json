@@ -1,0 +1,20 @@
+{
+  "run_id": "run_20260920_091025",
+  "started_at": "2026-09-20T09:10:25.469473+00:00",
+  "last_updated_at": "2026-09-20T09:10:25.557228+00:00",
+  "last_page": 1,
+  "last_job_id": "~01mock0004abcdef",
+  "oldest_job_date": "2026-09-20T05:30:00+00:00",
+  "newest_job_date": "2026-09-20T13:30:00+00:00",
+  "cutoff_date": "2026-08-21T09:10:25.469473+00:00",
+  "jobs_collected": 5,
+  "pages_processed": 1,
+  "status": "completed",
+  "collected_job_ids": [
+    "~01mock0000abcdef",
+    "~01mock0004abcdef",
+    "~01mock0002abcdef",
+    "~01mock0003abcdef",
+    "~01mock0001abcdef"
+  ]
+}

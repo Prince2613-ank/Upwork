@@ -1,0 +1,13 @@
+{
+  "mode": "user_tuned_pacing",
+  "comment": "User configured: page switch 2.0s, job fetch 3.0s, card skip 0.2s, inter-sweep rest 15s",
+  "search_delay_min": 1.95,
+  "search_delay_max": 2.05,
+  "detail_delay_min": 2.95,
+  "detail_delay_max": 3.05,
+  "skip_delay_min": 0.18,
+  "skip_delay_max": 0.22,
+  "inter_sweep_rest_sec": 15.0,
+  "max_combined_jobs_per_min": 26.0,
+  "rate_limit_cooldown_sec": 45.0
+}

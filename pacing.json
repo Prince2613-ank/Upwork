@@ -1,0 +1,5 @@
+{
+  "target_jobs_per_minute": 28,
+  "delay_between_jobs": 1.6,
+  "description": "Dynamic pacing configuration for Flodata country-wise dual scraper. Target 25-30 jobs/min combined (1.6s delay between jobs)."
+}
