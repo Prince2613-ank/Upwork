@@ -1,6 +1,12 @@
 # Environment variables and secrets
 .env
 .env.local
+.env.server
+.server-deps/
+deploy/secrets/
+*.db-wal
+*.db-shm
+*.db-journal
 *.pem
 *.key
 

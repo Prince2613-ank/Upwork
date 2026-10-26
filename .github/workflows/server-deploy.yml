@@ -1,0 +1,44 @@
+name: Deploy server release
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full commit SHA of an image already built by Build server release
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: flodata-production-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy tested image over SSH
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          BACKUP_DIR: ${{ vars.BACKUP_DIR }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$COMMIT_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z0-9_-]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ && "$DEPLOY_PATH" != / ]]
+          [[ "$BACKUP_DIR" =~ ^/[a-zA-Z0-9_./-]+$ && "$BACKUP_DIR" != / ]]
+          [[ -n "$DEPLOY_SSH_KEY" && -n "$DEPLOY_KNOWN_HOSTS" ]]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$COMMIT_SHA"
+          # The tracked deployment scripts must already be installed on the host.
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_PATH' && BACKUP_DIR='$BACKUP_DIR' sh deploy/update.sh '$image'"

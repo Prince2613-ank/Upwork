@@ -1,0 +1,20 @@
+{$DOMAIN} {
+    basic_auth {
+        {$DASHBOARD_USER} {$DASHBOARD_PASSWORD_HASH}
+    }
+    handle_path /browser/a/* {
+        forward_auth api:8000 {
+            uri /api/remote-ready
+        }
+        reverse_proxy browser-a:6080
+    }
+    handle_path /browser/b/* {
+        forward_auth api:8000 {
+            uri /api/remote-ready
+        }
+        reverse_proxy browser-b:6080
+    }
+    handle {
+        reverse_proxy api:8000
+    }
+}
