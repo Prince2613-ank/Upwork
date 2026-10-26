@@ -1,0 +1,15 @@
+.git
+.server-deps
+.env*
+output*
+data
+chrome-profile*
+__pycache__
+.pytest*
+*.db*
+*.log
+*.html
+!server/static/index.html
+jobs_*.csv
+scratch
+deploy/secrets

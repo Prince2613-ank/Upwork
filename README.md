@@ -1,5 +1,7 @@
 # Flodata Analytics: Upwork Market-Intelligence Data Collection System
 
+**Linux server deployment:** use the new [server pipeline guide](docs/SERVER_DEPLOYMENT.md) for the authenticated dashboard, persistent browser sessions, two workers at 5–7 jobs/minute each, daily scheduling, PostgreSQL storage, Google Chat HTML delivery, Docker Compose, and GitHub release/deployment workflows. The existing local CLI below remains available. Scheduling and outbound delivery are disabled until configured.
+
 An enterprise-grade, structured market-intelligence collection engine designed to harvest and normalize Upwork job postings, client purchasing patterns, and complete feedback history over a rolling **one-month window** for downstream B2B analysis with Claude.
 
 ---

@@ -1,0 +1,91 @@
+name: flodata
+x-app: &app
+  image: ${FLODATA_IMAGE:-flodata-server:local}
+  build:
+    context: .
+    dockerfile: deploy/Dockerfile
+  restart: unless-stopped
+  env_file: .env.server
+  environment: &environment
+    DATABASE_URL: postgresql+psycopg://flodata:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/flodata
+    PIPELINE_DATA_DIR: /data
+    BROWSER_A_CDP: http://browser-a:9222
+    BROWSER_B_CDP: http://browser-b:9222
+  volumes:
+    - pipeline-data:/data
+    - ./deploy/secrets:/secrets
+  depends_on:
+    db:
+      condition: service_healthy
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: flodata
+      POSTGRES_DB: flodata
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U flodata -d flodata"]
+      interval: 10s
+      retries: 10
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5)"]
+      interval: 15s
+      retries: 10
+      start_period: 30s
+  worker:
+    <<: *app
+    command: [python, -m, server.pipeline, worker]
+    depends_on:
+      api: {condition: service_healthy}
+      browser-a: {condition: service_started}
+      browser-b: {condition: service_started}
+  scheduler:
+    <<: *app
+    command: [python, -m, server.pipeline, scheduler]
+    depends_on:
+      api: {condition: service_healthy}
+  browser-a: &browser
+    image: ${FLODATA_IMAGE:-flodata-server:local}
+    build: {context: ., dockerfile: deploy/Dockerfile}
+    restart: unless-stopped
+    command: [python, deploy/browser_service.py]
+    shm_size: 1gb
+    security_opt: ["seccomp=./deploy/seccomp_profile.json"]
+    volumes: ["browser-a-data:/data"]
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+  browser-b:
+    <<: *browser
+    volumes: ["browser-b-data:/data"]
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    env_file: .env.server
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      api: {condition: service_healthy}
+    logging:
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  postgres-data:
+  pipeline-data:
+  browser-a-data:
+  browser-b-data:
+  caddy-data:
