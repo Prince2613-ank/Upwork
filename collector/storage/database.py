@@ -8,12 +8,15 @@ import json
 from typing import Set, List, Optional
 from pathlib import Path
 from collector.models.schema import CollectedJob
+from collector.storage.central import CentralStore, database_path
 
 class JobDatabase:
     """Manages unique job records and deduplication across pages via SQLite WAL."""
 
-    def __init__(self, db_path: str = "./output/database.db", existing_job_ids: Optional[List[str]] = None):
-        self.db_path = str(Path(db_path).resolve())
+    def __init__(self, db_path: str = None, existing_job_ids: Optional[List[str]] = None):
+        self.db_path = str(Path(db_path or database_path()).resolve())
+        self.store = CentralStore(self.db_path)
+        self.store.initialize()
         # Ensure directory exists
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
@@ -125,44 +128,19 @@ class JobDatabase:
         self.jobs_discovered += 1
 
     def add_job(self, job: CollectedJob) -> bool:
-        """
-        Adds a job if unique. If already seen, updates the record if the new job contains richer details.
-        """
+        """Upsert one job row; keep richer saved descriptions and reviews."""
         key = job.job_id or job.job_url
+        data = job.model_dump(mode="json")
+        raw = data.pop("raw_html", "")
         with self.get_conn() as conn:
-            try:
-                conn.execute("BEGIN IMMEDIATE")
-                cursor = conn.execute("SELECT job_json FROM jobs WHERE job_id = ?", (key,))
-                existing_row = cursor.fetchone()
-                job_json = job.model_dump_json()
-
-                if existing_row is not None:
-                    try:
-                        old_data = json.loads(existing_row[0])
-                        old_desc = len((old_data.get("job") or {}).get("description") or "")
-                        old_hist = len(old_data.get("client_recent_history") or [])
-                        new_desc = len(job.job.description or "")
-                        new_hist = len(job.client_recent_history or [])
-                        if new_desc > old_desc or new_hist > old_hist or not old_data.get("posted_raw"):
-                            conn.execute("UPDATE jobs SET job_json = ? WHERE job_id = ?", (job_json, key))
-                            conn.commit()
-                            return True
-                    except Exception:
-                        pass
-                    self.duplicates_count += 1
-                    conn.commit()
-                    return False
-
-                # Ensure seen_ids contains key
-                conn.execute("INSERT OR IGNORE INTO seen_ids (job_id) VALUES (?)", (key,))
-                # Insert to jobs
-                conn.execute("INSERT INTO jobs (job_id, job_json) VALUES (?, ?)", (key, job_json))
-                conn.commit()
-                return True
-            except Exception as e:
-                conn.rollback()
-                print(f"Error adding job to DB: {e}")
-                return False
+            old = conn.execute("SELECT job_json FROM jobs WHERE job_id=?", (key,)).fetchone()
+        merged = self.store.save(key, data, raw)
+        with self.get_conn() as conn:
+            conn.execute("INSERT OR IGNORE INTO seen_ids(job_id) VALUES(?)", (key,))
+        changed = old is None or json.loads(old[0]) != merged
+        if not changed:
+            self.duplicates_count += 1
+        return changed
 
     def get_all_jobs(self) -> List[CollectedJob]:
         jobs = []

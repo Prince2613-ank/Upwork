@@ -1,7 +1,7 @@
 """
 FLO DATA ALIGN & RELEASE YESTERDAY JOBS
 =======================================
-1. Aligns database_yesterday.db and database_daily_YYYY-MM-DD.db to strictly contain yesterday's jobs.
+1. Reads date-filtered job rows from the permanent output/database.db without modifying stored history.
 2. Validates data integrity (100% full descriptions, client reviews, verified payments).
 3. Compiles and releases standalone HTML reports (upwork_yesterday_report.html, upwork_today_report.html).
 4. Exports updated CSV files (jobs_yesterday.csv, jobs_today.csv).
@@ -24,6 +24,7 @@ OUTPUT_DIR = ROOT / "output"
 sys.path.insert(0, str(ROOT))
 
 from generate_standalone_report import generate_report, clean_freelancer_review
+from collector.storage.central import database_path
 
 
 def align_and_release_date(target_date: str, db_path: Path, out_html: Path, title: str, require_reviews_only: bool = True):
@@ -55,6 +56,11 @@ def align_and_release_date(target_date: str, db_path: Path, out_html: Path, titl
                 is_valid = (posted_at == target_date)
             else:
                 is_valid = True
+
+            job_dict = d.get("job") or {}
+            desc = (job_dict.get("description") or d.get("description") or "").strip()
+            if not desc or len(desc) < 25:
+                is_valid = False
 
             if is_valid and require_reviews_only:
                 hist = d.get("client_recent_history") or []
@@ -141,9 +147,9 @@ def align_and_release(require_reviews_only: bool = True):
     day2_name = two_days_ago_dt.strftime("%A")  # "Monday"
 
     # 1. Day 1 (Yesterday - Tuesday)
-    day1_db = OUTPUT_DIR / f"database_daily_{yesterday_str}.db"
+    day1_db = database_path(OUTPUT_DIR)
     if not day1_db.exists():
-        day1_db = OUTPUT_DIR / "database_yesterday.db"
+        day1_db = database_path(OUTPUT_DIR)
     align_and_release_date(
         target_date=yesterday_str,
         db_path=day1_db,
@@ -162,8 +168,8 @@ def align_and_release(require_reviews_only: bool = True):
             pass
 
     # 2. Day 2 (2 days ago - Monday)
-    day2_db = OUTPUT_DIR / f"database_daily_{two_days_ago_str}.db"
-    comb_candidate = OUTPUT_DIR / "database_today.db"
+    day2_db = database_path(OUTPUT_DIR)
+    comb_candidate = database_path(OUTPUT_DIR)
     if comb_candidate.exists():
         day2_db = comb_candidate
     if day2_db and day2_db.exists():
@@ -194,9 +200,9 @@ def align_and_release(require_reviews_only: bool = True):
         return None
 
     comb_db = get_valid_db([
-        OUTPUT_DIR / "database_today.db",
-        ROOT / "output" / "database_today.db",
-        OUTPUT_DIR / f"database_daily_{two_days_ago_str}_to_{yesterday_str}.db"
+        database_path(OUTPUT_DIR),
+        database_path(OUTPUT_DIR),
+        database_path(OUTPUT_DIR)
     ])
     if comb_db:
         out_comb = OUTPUT_DIR / "upwork_2days_report.html"
@@ -206,7 +212,7 @@ def align_and_release(require_reviews_only: bool = True):
         generate_report(
             db_path=str(comb_db),
             output_html=str(out_comb),
-            require_reviews_only=True,
+            require_reviews_only=require_reviews_only,
             date_filter_start=two_days_ago_str,
             date_filter_end=yesterday_str,
             report_title=f"Upwork Intelligence Master Report — {day2_name} & {day1_name} ({two_days_ago_str} & {yesterday_str})"

@@ -1363,20 +1363,20 @@
             <div class="presets-group">
                 <label>⚡ Quick Date Presets</label>
                 <div class="presets-pills">
-                    <button type="button" id="preset1Day" class="preset-pill" onclick="applyPreset('1day')">📅 1 Day (Yesterday)</button>
-                    <button type="button" id="preset2Days" class="preset-pill active-preset" onclick="applyPreset('2days')">📅 2 Days (Mon & Tue)</button>
-                    <button type="button" id="preset3Days" class="preset-pill" onclick="applyPreset('3days')">📅 3 Days (Sun - Tue)</button>
+                    <button type="button" id="preset1Day" class="preset-pill" onclick="applyPreset('1day')">📅 1 Day (Yesterday - 25 Oct)</button>
+                    <button type="button" id="preset2Days" class="preset-pill active-preset" onclick="applyPreset('2days')">📅 2 Days (24 & 25 Oct)</button>
+                    <button type="button" id="preset3Days" class="preset-pill" onclick="applyPreset('3days')">📅 3 Days (23 - 25 Oct)</button>
                     <button type="button" id="preset1Week" class="preset-pill" onclick="applyPreset('1week')">📅 1 Week (7 Days)</button>
                 </div>
             </div>
 
             <div class="date-input-group">
                 <label>Start Date</label>
-                <input type="date" id="launchStartDate" value="2026-10-19" class="launch-date-picker" onchange="onManualDateChange()">
+                <input type="date" id="launchStartDate" value="2026-10-24" class="launch-date-picker" onchange="onManualDateChange()">
             </div>
             <div class="date-input-group">
                 <label>End Date</label>
-                <input type="date" id="launchEndDate" value="2026-10-20" class="launch-date-picker" onchange="onManualDateChange()">
+                <input type="date" id="launchEndDate" value="2026-10-25" class="launch-date-picker" onchange="onManualDateChange()">
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 0.35rem; justify-content: flex-end;">
@@ -1672,10 +1672,10 @@
         let currentQuickFilter = 'all';
         let activePresetKey = '2days';
         const PRESET_MAP = {
-            '1day': { start: '2026-10-20', end: '2026-10-20', label: '1 Day (Yesterday - Tuesday, Oct 20)' },
-            '2days': { start: '2026-10-19', end: '2026-10-20', label: '2 Days (Monday & Tuesday, Oct 19 - 20)' },
-            '3days': { start: '2026-10-18', end: '2026-10-20', label: '3 Days (Sunday to Tuesday, Oct 18 - 20)' },
-            '1week': { start: '2026-10-14', end: '2026-10-20', label: '1 Week (Last 7 Days, Oct 14 - 20)' }
+            '1day': { start: '2026-10-25', end: '2026-10-25', label: '1 Day (Yesterday - Sunday, Oct 25)' },
+            '2days': { start: '2026-10-24', end: '2026-10-25', label: '2 Days (Saturday & Sunday, Oct 24 - 25)' },
+            '3days': { start: '2026-10-23', end: '2026-10-25', label: '3 Days (Friday to Sunday, Oct 23 - 25)' },
+            '1week': { start: '2026-10-19', end: '2026-10-25', label: '1 Week (Last 7 Days, Oct 19 - 25)' }
         };
 
         function applyPreset(presetKey) {
@@ -1723,8 +1723,8 @@
         // 1. FETCH STATUS (METRICS)
         async function fetchStatus() {
             try {
-                const s = document.getElementById('launchStartDate') ? document.getElementById('launchStartDate').value : '2026-10-19';
-                const e = document.getElementById('launchEndDate') ? document.getElementById('launchEndDate').value : '2026-10-20';
+                const s = document.getElementById('launchStartDate') ? document.getElementById('launchStartDate').value : '2026-10-24';
+                const e = document.getElementById('launchEndDate') ? document.getElementById('launchEndDate').value : '2026-10-25';
                 const rOnly = document.getElementById('chkReviewsOnly') ? document.getElementById('chkReviewsOnly').checked : true;
 
                 const url = `/api/status?start_date=${encodeURIComponent(s)}&end_date=${encodeURIComponent(e)}&reviews_only=${rOnly}`;
@@ -1817,8 +1817,8 @@
         // 3. FETCH ALL COLLECTED JOBS (DYNAMIC TARGET DATASET)
         async function fetchJobs() {
             try {
-                const s = document.getElementById('launchStartDate') ? document.getElementById('launchStartDate').value : '2026-10-19';
-                const e = document.getElementById('launchEndDate') ? document.getElementById('launchEndDate').value : '2026-10-20';
+                const s = document.getElementById('launchStartDate') ? document.getElementById('launchStartDate').value : '2026-10-24';
+                const e = document.getElementById('launchEndDate') ? document.getElementById('launchEndDate').value : '2026-10-25';
                 const rOnly = document.getElementById('chkReviewsOnly') ? document.getElementById('chkReviewsOnly').checked : true;
 
                 const res = await fetch(`/api/jobs?start_date=${encodeURIComponent(s)}&end_date=${encodeURIComponent(e)}&reviews_only=${rOnly}&limit=5000`);

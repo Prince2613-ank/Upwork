@@ -4,10 +4,11 @@
   "description": "Daily Automated Upwork Intelligence Scraper & Analytics Dashboard",
   "main": "run_daily_system.py",
   "scripts": {
-    "start": "python run_daily_system.py",
-    "report": "python generate_standalone_report.py --db output/database_today.db --output output/upwork_today_report.html",
-    "status": "python -c \"import sqlite3; conn=sqlite3.connect('output/database_today.db'); print('Today jobs in DB:', conn.execute('SELECT count(*) FROM jobs').fetchone()[0]); conn.close()\"",
-    "dashboard": "python -m uvicorn collector.dashboard.app:app --host 0.0.0.0 --port 8000"
+    "start": "python -m server.launcher",
+    "report": "python -m server.admin latest-report",
+    "status": "python -m server.admin status",
+    "dashboard": "python -m server.launcher --web-only",
+    "start:legacy": "python run_daily_system.py"
   },
   "keywords": [
     "upwork",

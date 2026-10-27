@@ -1,7 +1,4 @@
 {$DOMAIN} {
-    basic_auth {
-        {$DASHBOARD_USER} {$DASHBOARD_PASSWORD_HASH}
-    }
     handle_path /browser/a/* {
         forward_auth api:8000 {
             uri /api/remote-ready
@@ -15,6 +12,8 @@
         reverse_proxy browser-b:6080
     }
     handle {
-        reverse_proxy api:8000
+        reverse_proxy api:8000 {
+            header_up X-Real-IP {remote_host}
+        }
     }
 }

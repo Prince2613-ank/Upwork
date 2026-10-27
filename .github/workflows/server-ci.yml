@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17-bookworm
+        image: postgres:18-bookworm
         env:
           POSTGRES_USER: flodata
           POSTGRES_PASSWORD: test-only-password
@@ -24,9 +24,9 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-server.txt
-      - run: pip install -r requirements-server.txt
-      - run: python -m pytest tests/test_server_pipeline.py -q
+          cache-dependency-path: requirements-server.lock
+      - run: pip install -r requirements-server.lock
+      - run: python -m pytest tests/test_server_pipeline.py tests/test_production_flow.py tests/test_deployment_transfer.py tests/test_auto_release.py tests/test_files_cleanup.py tests/test_worker_speed.py tests/test_daily_context.py -q
         env:
           TEST_POSTGRES_URL: postgresql+psycopg://flodata:test-only-password@localhost:5432/flodata_test
       - run: python -m compileall -q server

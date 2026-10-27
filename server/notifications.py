@@ -40,16 +40,20 @@ def upload_report(settings, run, path):
     from google_auth_httplib2 import AuthorizedHttp
     service = build("chat", "v1", http=AuthorizedHttp(credentials, http=httplib2.Http(timeout=30)), cache_discovery=False)
     # Deterministic message ID prevents duplicate messages on retry. Check before upload.
-    message_id = f'client-report-{run["id"]}'
+    import hashlib
+    revision = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    message_id = f'client-report-{run["id"][:16]}-{revision}'
     from googleapiclient.errors import HttpError
     try:
         service.spaces().messages().get(name=f'{settings.chat_space}/messages/{message_id}').execute()
         return
     except HttpError as exc:
-        if exc.resp.status != 404:
+        # Google answers 403 ("...or the resource doesn't exist") for a message ID that was never created;
+        # a real permission problem still surfaces from the upload and create calls below.
+        if exc.resp.status not in (403, 404):
             raise
     attachment = service.media().upload(parent=settings.chat_space,
-        body={"filename": f'upwork_{run["start_date"]}_to_{run["end_date"]}_{run["id"][:8]}.html'},
+        body={"filename": path.name},
         media_body=MediaFileUpload(str(path), mimetype="text/html", resumable=False)).execute()
     text = f'Upwork report: {run["start_date"]} to {run["end_date"]}. Status: {run["status"]}.'
     service.spaces().messages().create(parent=settings.chat_space, messageId=message_id,

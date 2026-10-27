@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from generate_standalone_report import clean_freelancer_review, generate_report
+from collector.storage.central import CentralStore, database_path
 from collector.extraction.job_parser import parse_job_detail_page
 
 OUTPUT_DIR = ROOT / "output"
@@ -33,9 +34,9 @@ LOGS_DIR = OUTPUT_DIR / "logs"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_14DAYS = OUTPUT_DIR / "database_14days.db"
-DB_MAIN   = OUTPUT_DIR / "database.db"
-DB_1WEEK  = OUTPUT_DIR / "database_1week.db"
+DB_14DAYS = database_path(OUTPUT_DIR)
+DB_MAIN   = database_path(OUTPUT_DIR)
+DB_1WEEK  = database_path(OUTPUT_DIR)
 
 PORT_A = 9222  # Chrome
 PORT_B = 9223  # Edge
@@ -250,63 +251,19 @@ class ScraperManager:
         return {"chrome_port_9222": chrome_ok, "edge_port_9223": edge_ok}
 
     def setup_databases(self):
-        """Initializes tables and claims already saved job IDs strictly from target database."""
-        for db_path in [DB_14DAYS, DB_MAIN]:
-            try:
-                conn = sqlite3.connect(db_path, timeout=30)
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
-                    job_id   TEXT PRIMARY KEY,
-                    job_json TEXT,
-                    raw_html TEXT,
-                    saved_at TEXT DEFAULT (datetime('now'))
-                )""")
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
-
-        try:
-            conn = sqlite3.connect(DB_1WEEK, timeout=30)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
-                job_id   TEXT PRIMARY KEY,
-                job_json TEXT,
-                raw_html TEXT,
-                saved_at TEXT DEFAULT (datetime('now'))
-            )""")
-            conn.commit()
-            existing = set(r[0] for r in conn.execute("SELECT job_id FROM jobs").fetchall())
-            self.claimed_ids = set(existing)
-            conn.close()
-            self.log(f"Loaded {len(self.claimed_ids):,} existing jobs from database_1week.db")
-        except Exception as e:
-            self.log(f"DB init notice: {e}")
+        self.store = CentralStore(DB_MAIN)
+        self.store.initialize()
+        self.store.migrate_legacy(OUTPUT_DIR)
+        if getattr(self, "run_id", None):
+            self.store.finish_run(self.run_id, "window_changed")
+        self.run_id = self.store.start_run(self.date_start, self.date_end)
+        self.claimed_ids = self.store.ids(self.date_start, self.date_end)
+        self.log(f"Central database: {DB_MAIN.name}; {len(self.claimed_ids):,} jobs in selected window")
 
     def save_job(self, job_dict: dict, jid: str, raw_html: str, actual_dt: str):
-        d = {k: v for k, v in job_dict.items() if k != "raw_html"}
-        raw_json = json.dumps(d, default=str)
+        data = {k: v for k, v in job_dict.items() if k != "raw_html"}
         with self.db_lock:
-            # 1. database_1week.db
-            if not actual_dt or (self.date_start <= actual_dt <= self.date_end):
-                try:
-                    conn = sqlite3.connect(DB_1WEEK, timeout=30)
-                    conn.execute("INSERT OR REPLACE INTO jobs(job_id, job_json, raw_html) VALUES(?, ?, ?)",
-                                 (jid, raw_json, raw_html))
-                    conn.commit()
-                    conn.close()
-                except Exception as e:
-                    self.log(f"[DB ERR 1WEEK] {e}")
-
-            # 2. database_14days.db & database.db
-            try:
-                conn = sqlite3.connect(DB_14DAYS, timeout=30)
-                conn.execute("INSERT OR REPLACE INTO jobs(job_id, job_json, raw_html) VALUES(?, ?, ?)",
-                             (jid, raw_json, raw_html))
-                conn.commit()
-                conn.close()
-            except Exception:
-                pass
+            self.store.save(jid, data, raw_html, self.run_id)
 
     def extract_job_date(self, d: dict) -> str:
         for f in ("posted_at", "job_posted_at", "posted_date"):
@@ -570,7 +527,7 @@ class ScraperManager:
             time.sleep(180)
             if self.stats["a_new"] + self.stats["b_new"] > 0:
                 try:
-                    self.log("📊 [Report Auto-Sync] Generating updated HTML report from database_1week.db...")
+                    self.log("📊 [Report Auto-Sync] Generating date-filtered HTML report from the permanent database...")
                     generate_report(
                         db_path=str(DB_1WEEK),
                         output_html=str(OUTPUT_DIR / "upwork_1week_report.html"),
@@ -637,6 +594,8 @@ class ScraperManager:
             if not self.is_running:
                 return {"status": "not_running", "message": "Scraper is not running"}
             self.stop_event.set()
+            if getattr(self, "run_id", None):
+                self.store.finish_run(self.run_id, "stopped")
             self.is_running = False
             self.log("⏹️ Stop requested. Gracefully pausing active workers...")
 

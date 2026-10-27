@@ -140,6 +140,7 @@ def parse_job_detail_page(
     html: str,
     job_url: str = "",
     search_card_metadata: Optional[Dict[str, Any]] = None,
+    include_history: bool = True,
 ) -> CollectedJob:
     """
     Parses full job detail page HTML into a validated CollectedJob model.
@@ -246,7 +247,7 @@ def parse_job_detail_page(
     client_location = client.location or meta.get("client_location", "")
 
     # 7. Client Recent History (Section 5 & 6)
-    recent_history = parse_client_history(soup)
+    recent_history = parse_client_history(soup) if include_history else []
 
     # 8. Extraction Status Validation (Section 14)
     has_full_reviews = (

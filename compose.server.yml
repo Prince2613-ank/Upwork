@@ -9,8 +9,10 @@ x-app: &app
   environment: &environment
     DATABASE_URL: postgresql+psycopg://flodata:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/flodata
     PIPELINE_DATA_DIR: /data
+    PIPELINE_ENV_FILE: /dev/null
     BROWSER_A_CDP: http://browser-a:9222
     BROWSER_B_CDP: http://browser-b:9222
+    TRUST_PROXY_HEADERS: "true"
   volumes:
     - pipeline-data:/data
     - ./deploy/secrets:/secrets
@@ -24,14 +26,14 @@ x-app: &app
       max-file: "3"
 services:
   db:
-    image: postgres:17-bookworm
+    image: postgres:18-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_USER: flodata
       POSTGRES_DB: flodata
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres18-data:/var/lib/postgresql
     healthcheck:
       test: [CMD-SHELL, "pg_isready -U flodata -d flodata"]
       interval: 10s
@@ -51,8 +53,8 @@ services:
     command: [python, -m, server.pipeline, worker]
     depends_on:
       api: {condition: service_healthy}
-      browser-a: {condition: service_started}
-      browser-b: {condition: service_started}
+      browser-a: {condition: service_healthy}
+      browser-b: {condition: service_healthy}
   scheduler:
     <<: *app
     command: [python, -m, server.pipeline, scheduler]
@@ -66,6 +68,12 @@ services:
     shm_size: 1gb
     security_opt: ["seccomp=./deploy/seccomp_profile.json"]
     volumes: ["browser-a-data:/data"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:9222/json/version', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     logging:
       options: {max-size: 10m, max-file: "3"}
   browser-b:
@@ -84,7 +92,7 @@ services:
     logging:
       options: {max-size: 10m, max-file: "3"}
 volumes:
-  postgres-data:
+  postgres18-data:
   pipeline-data:
   browser-a-data:
   browser-b-data:

@@ -2,7 +2,9 @@
 .env
 .env.local
 .env.server
+.env.server.tmp
 .server-deps/
+.venv/
 deploy/secrets/
 *.db-wal
 *.db-shm
@@ -54,3 +56,7 @@ jobs_*.csv
 # Data artifacts (tracked via checkpoints/exports if needed)
 data/checkpoints/*.tmp
 data/raw/
+
+# Google Chat OAuth credentials
+client_secret.json
+secrets/

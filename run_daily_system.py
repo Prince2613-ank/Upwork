@@ -3,8 +3,8 @@ FLODATA DAILY INTELLIGENCE SYSTEM & DUAL-SCRAPER ORCHESTRATOR
 =============================================================
 - Single Command Entry Point: Launched via `npm start` or `python run_daily_system.py`
 - Self-Healing Browser Boot: Auto-launches visible Chrome (:9222) and Edge (:9223) if not open
-- Daily Database Auto-Generation: Creates `output/database_daily_YYYY-MM-DD.db` dynamically every day
-- Automatic Midnight Rollover: Detects date change, finalizes yesterday's report, and creates today's DB
+- Permanent database: appends/upserts jobs in output/database.db; records each run as a row
+- Automatic Midnight Rollover: Detects date change, finalizes yesterday's report, and opens a new collection run row
 - Zero-Mismatch Data Integrity: 100% full descriptions, un-truncated reviews via Nuxt SSR, formatted locations
 - Live Web Dashboard: Real-time telemetry on http://localhost:8000
 - Standalone HTML Reports: Auto-compiles `upwork_today_report.html` and `output/jobs_today.csv`
@@ -32,6 +32,17 @@ from typing import Dict, Any, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+if __name__ == "__main__":
+    # Dashboard imports must address the running manager, not a second module copy.
+    sys.modules["run_daily_system"] = sys.modules[__name__]
+
+from collector.storage.central import CentralStore, database_path
+
+from generate_standalone_report import (
+    restore_full_description_from_raw,
+    restore_full_feedback_from_raw,
+    clean_freelancer_review
+)
 
 OUTPUT_DIR = ROOT / "output"
 REPORTS_DIR = OUTPUT_DIR / "reports"
@@ -40,12 +51,13 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_MASTER = OUTPUT_DIR / "database.db"
-DB_TODAY_ALIAS = OUTPUT_DIR / "database_today.db"
-DB_YESTERDAY_ALIAS = OUTPUT_DIR / "database_yesterday.db"
+DB_MASTER = database_path(OUTPUT_DIR)
+DB_TODAY_ALIAS = DB_MASTER  # Compatibility name; no extra database file
+DB_YESTERDAY_ALIAS = DB_MASTER
 
 PORT_A = 9222  # Chrome
 PORT_B = 9223  # Edge
+MAX_SWEEPS = int(os.getenv("MAX_SWEEPS", "2"))  # Stop after exactly 2 sweeps for target dates
 
 # Dedicated High-Volume Market Lists (100% Active Daily Hiring)
 COUNTRIES_WORKER_A = [
@@ -170,7 +182,7 @@ class GlobalSpeedGovernor:
                     with open(PACING_CONFIG_FILE, "r", encoding="utf-8") as f:
                         cfg = json.load(f)
                     cpm = float(cfg.get("max_combined_jobs_per_min", 26.0))
-                    self.target_cpm = max(15.0, min(cpm, 30.0))
+                    self.target_cpm = max(4.0, min(cpm, 30.0))
                     self.min_interval = 60.0 / self.target_cpm
                 except Exception:
                     pass
@@ -263,7 +275,9 @@ SESSION_STATE_FILE = OUTPUT_DIR / "daily_session.json"
 
 class DailyDatabaseManager:
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+        self.run_id = None
+        self.store = CentralStore(DB_MASTER)
         self.today_date = self.get_today_date()
         
         now_dt = datetime.now()
@@ -271,13 +285,13 @@ class DailyDatabaseManager:
         two_days_ago_str = (now_dt - timedelta(days=2)).strftime("%Y-%m-%d")
         
         # User requested Monday and Tuesday (yesterday & 2 days ago)
-        self.target_dates = [yesterday_str, two_days_ago_str]
+        self.target_dates = [yesterday_str]
             
         self.target_date = self.target_dates[0]  # Tuesday (yesterday)
         self.earliest_date = min(self.target_dates)  # Monday (2 days ago)
-        self.active_db_path = OUTPUT_DIR / f"database_daily_{self.target_date}.db"
-        self.saturday_db_path = OUTPUT_DIR / f"database_daily_{two_days_ago_str}.db"
-        self.weekend_db_path = OUTPUT_DIR / f"database_weekend_{two_days_ago_str}_to_{self.target_date}.db"
+        self.active_db_path = DB_MASTER
+        self.saturday_db_path = DB_MASTER
+        self.weekend_db_path = DB_MASTER
         self.claimed_ids = set()
         self.daily_saves_count = 0
         self.save_timestamps = deque(maxlen=500)
@@ -319,7 +333,12 @@ class DailyDatabaseManager:
             self.target_dates = dates
             self.target_date = dates[0]
             self.earliest_date = dates[-1]
-            self.active_db_path = OUTPUT_DIR / f"database_daily_{self.target_date}.db"
+            self.active_db_path = DB_MASTER
+            if self.initialized:
+                self.store.finish_run(self.run_id, "window_changed")
+                self.run_id = self.store.start_run(self.earliest_date, self.target_date)
+                self.claimed_ids = self.store.ids(self.earliest_date, self.target_date)
+                self.daily_saves_count = len(self.claimed_ids)
             print(f"\n[DB MANAGER] 🎯 Updated target date range from Dashboard: {self.earliest_date} to {self.target_date} ({len(self.target_dates)} days: {self.target_dates})", flush=True)
             return True
 
@@ -339,91 +358,26 @@ class DailyDatabaseManager:
     def init_current_database(self, force_fresh: bool = False):
         with self.lock:
             self.today_date = self.get_today_date()
-            now_dt = datetime.now()
-            yesterday_str = (now_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-            two_days_ago_str = (now_dt - timedelta(days=2)).strftime("%Y-%m-%d")
-            
-            self.target_dates = [yesterday_str, two_days_ago_str]
-                
-            self.target_date = self.target_dates[0]
-            self.earliest_date = min(self.target_dates)
-            self.active_db_path = OUTPUT_DIR / f"database_daily_{self.target_date}.db"
-            self.saturday_db_path = OUTPUT_DIR / f"database_daily_{two_days_ago_str}.db"
-            self.weekend_db_path = OUTPUT_DIR / f"database_weekend_{two_days_ago_str}_to_{self.target_date}.db"
-
-            is_same_day = False
-            if not force_fresh and SESSION_STATE_FILE.exists():
-                try:
-                    with open(SESSION_STATE_FILE, "r", encoding="utf-8") as sf:
-                        sdata = json.load(sf)
-                    if sdata.get("session_calendar_date") == self.today_date and sdata.get("target_dates") == self.target_dates:
-                        is_same_day = True
-                except Exception:
-                    pass
-
-            if is_same_day and self.active_db_path.exists():
-                print(f"[DB MANAGER] 🔄 [RESUME TODAY'S SESSION] Same-day restart detected for {self.today_date} (Targets: {self.target_dates}).", flush=True)
-            else:
-                print(f"[DB MANAGER] ✨ [NEW SESSION INITIALIZING] Launch for {self.today_date} (Targeting: {self.target_dates})...", flush=True)
-
-                for p in [self.active_db_path, self.saturday_db_path, self.weekend_db_path, DB_YESTERDAY_ALIAS, DB_TODAY_ALIAS]:
-                    try:
-                        conn = sqlite3.connect(p, timeout=30)
-                        conn.execute("PRAGMA journal_mode=WAL")
-                        conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
-                            job_id   TEXT PRIMARY KEY,
-                            job_json TEXT,
-                            raw_html TEXT,
-                            saved_at TEXT DEFAULT (datetime('now'))
-                        )""")
-                        conn.commit()
-                        conn.close()
-                    except Exception as e:
-                        print(f"[DB ERR] Init {p.name}: {e}", flush=True)
-
-                try:
-                    with open(SESSION_STATE_FILE, "w", encoding="utf-8") as sf:
-                        json.dump({
-                            "session_calendar_date": self.today_date,
-                            "target_dates": self.target_dates,
-                            "target_date": self.target_date,
-                            "active_db": self.active_db_path.name,
-                            "created_at": datetime.now().isoformat()
-                        }, sf, indent=2)
-                except Exception as e:
-                    print(f"[WARN] Could not write session state file: {e}", flush=True)
-
-            # Master DB permanent archive
-            try:
-                conn = sqlite3.connect(DB_MASTER, timeout=30)
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("""CREATE TABLE IF NOT EXISTS jobs (
-                    job_id   TEXT PRIMARY KEY,
-                    job_json TEXT,
-                    raw_html TEXT,
-                    saved_at TEXT DEFAULT (datetime('now'))
-                )""")
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[DB ERR] Init {DB_MASTER.name}: {e}", flush=True)
-
-            # Load existing claimed IDs from active database, saturday DB, and weekend DB
-            self.claimed_ids = set()
-            for p in [self.active_db_path, self.saturday_db_path, self.weekend_db_path]:
-                try:
-                    if p.exists():
-                        conn = sqlite3.connect(p, timeout=30)
-                        rows = conn.execute("SELECT job_id FROM jobs").fetchall()
-                        for r in rows:
-                            self.claimed_ids.add(r[0])
-                        conn.close()
-                except Exception:
-                    pass
+            if force_fresh:
+                self.store.finish_run(self.run_id)
+                yesterday = datetime.now() - timedelta(days=1)
+                self.target_dates = [yesterday.strftime("%Y-%m-%d")]
+                self.target_date = self.earliest_date = self.target_dates[0]
+            self.store.initialize()
+            migration = self.store.migrate_legacy(OUTPUT_DIR)
+            self.active_db_path = DB_MASTER
+            self.claimed_ids = self.store.ids(self.earliest_date, self.target_date)
             self.daily_saves_count = len(self.claimed_ids)
-
+            if not self.run_id or force_fresh:
+                self.run_id = self.store.start_run(self.earliest_date, self.target_date)
             self.initialized = True
-            print(f"[DB MANAGER] 🎯 Target Dates: {self.target_dates} | Loaded {len(self.claimed_ids):,} existing jobs.", flush=True)
+            SESSION_STATE_FILE.write_text(json.dumps({
+                "session_calendar_date": self.today_date,
+                "target_dates": self.target_dates,
+                "active_db": DB_MASTER.name,
+                "run_id": self.run_id,
+            }, indent=2), encoding="utf-8")
+            print(f"[DB MANAGER] Central database: {DB_MASTER.name}; window rows: {self.daily_saves_count}; imported: {migration}", flush=True)
 
     def check_and_perform_rollover(self) -> bool:
         """Checks if calendar date changed. If so, transitions to the new yesterday."""
@@ -499,80 +453,20 @@ class DailyDatabaseManager:
                 clean_revs.append(h)
         d["client_recent_history"] = clean_revs
 
-        raw_json = json.dumps(d, default=str)
-        job_dt = (d.get("posted_at") or d.get("posted_raw") or "")[:10]
-
+        if not self.initialized:
+            self.init_current_database()
         with self.lock:
-            # 1. Master DB always archives every job
-            try:
-                conn = sqlite3.connect(DB_MASTER, timeout=30)
-                conn.execute(
-                    "INSERT OR REPLACE INTO jobs(job_id, job_json, raw_html) VALUES(?, ?, ?)",
-                    (jid, raw_json, raw_html)
-                )
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[DB ERR] {DB_MASTER.name}: {e}", flush=True)
-
-            # 2. Multi-Day Partition: Save into active daily DB, date-specific DB, and DB_TODAY_ALIAS
-            posted_at_iso = d.get("posted_at") or ""
-            job_dt = posted_at_iso[:10] if len(posted_at_iso) >= 10 else ""
-            p_raw = (d.get("posted_raw") or "").lower()
-
-            if job_dt:
-                is_target_job = (job_dt in self.target_dates) or (self.earliest_date <= job_dt <= self.target_date)
-            else:
-                is_target_job = any(kw in p_raw for kw in ["yesterday", "day ago", "days ago"])
-
-            if is_target_job:
-                # Save into combined active daily DB and DB_TODAY_ALIAS
-                target_paths = [self.active_db_path, DB_TODAY_ALIAS]
-                if self.weekend_db_path not in target_paths:
-                    target_paths.append(self.weekend_db_path)
-                if job_dt:
-                    date_db = OUTPUT_DIR / f"database_daily_{job_dt}.db"
-                    if date_db not in target_paths:
-                        target_paths.append(date_db)
-
-                for p in target_paths:
-                    try:
-                        conn = sqlite3.connect(p, timeout=30)
-                        conn.execute("PRAGMA journal_mode=WAL")
-                        conn.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, job_json TEXT, raw_html TEXT, saved_at TEXT DEFAULT (datetime('now')))")
-                        conn.execute(
-                            "INSERT OR REPLACE INTO jobs(job_id, job_json, raw_html) VALUES(?, ?, ?)",
-                            (jid, raw_json, raw_html)
-                        )
-                        conn.commit()
-                        conn.close()
-                    except Exception as e:
-                        print(f"[DB ERR] {p.name}: {e}", flush=True)
-
-                self.daily_saves_count += 1
-                self.save_timestamps.append(time.time())
-                update_live_dashboard_status()
-            elif job_dt:
-                # Other date jobs route to their own date database
-                older_db = OUTPUT_DIR / f"database_daily_{job_dt}.db"
-                try:
-                    conn = sqlite3.connect(older_db, timeout=30)
-                    conn.execute("PRAGMA journal_mode=WAL")
-                    conn.execute("CREATE TABLE IF NOT EXISTS jobs (job_id TEXT PRIMARY KEY, job_json TEXT, raw_html TEXT, saved_at TEXT DEFAULT (datetime('now')))")
-                    conn.execute(
-                        "INSERT OR REPLACE INTO jobs(job_id, job_json, raw_html) VALUES(?, ?, ?)",
-                        (jid, raw_json, raw_html)
-                    )
-                    conn.commit()
-                    conn.close()
-                except Exception:
-                    pass
+            self.store.save(jid, d, raw_html, self.run_id)
+            self.claimed_ids.add(jid)
+            self.daily_saves_count = len(self.store.ids(self.earliest_date, self.target_date))
+            self.save_timestamps.append(time.time())
+            update_live_dashboard_status()
 
     def _export_csv(self, db_path: Path, csv_path: Path):
         import csv
         conn = sqlite3.connect(str(db_path))
         c = conn.cursor()
-        rows = c.execute("SELECT job_id, job_json FROM jobs").fetchall()
+        rows = c.execute("SELECT job_id, job_json FROM jobs WHERE posted_date >= ? AND posted_date <= ?", (self.earliest_date, self.target_date)).fetchall()
         conn.close()
 
         headers = [
@@ -704,13 +598,10 @@ def ensure_browsers_online():
                 str(chrome_exe),
                 "--remote-debugging-port=9222",
                 f"--user-data-dir={chrome_profile_dir}",
-                "--blink-settings=imagesEnabled=false",
-                "--mute-audio",
-                "--disable-background-networking",
                 "--no-first-run",
                 "--no-default-browser-check",
                 "https://www.upwork.com"
-            ])
+            ], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         else:
             print("[WARN] Chrome executable not found in default paths.", flush=True)
 
@@ -731,13 +622,10 @@ def ensure_browsers_online():
                 str(edge_exe),
                 "--remote-debugging-port=9223",
                 f"--user-data-dir={edge_profile_dir}",
-                "--blink-settings=imagesEnabled=false",
-                "--mute-audio",
-                "--disable-background-networking",
                 "--no-first-run",
                 "--no-default-browser-check",
                 "https://www.upwork.com"
-            ])
+            ], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
         else:
             print("[WARN] Edge executable not found in default paths.", flush=True)
 
@@ -924,7 +812,7 @@ def fetch_job_detail_single_tab(page, url) -> str:
             if (el) el.scrollIntoView({ behavior: 'instant', block: 'center' });
             else window.scrollTo(0, 1800);
         })()""")
-        time.sleep(0.3)
+        time.sleep(0.08)
     except Exception:
         pass
 
@@ -948,7 +836,7 @@ def fetch_job_detail_single_tab(page, url) -> str:
             })()""")
             if not clicked_vm:
                 break
-            time.sleep(0.4)
+            time.sleep(0.12)
         except Exception:
             break
 
@@ -1381,7 +1269,7 @@ def run_worker_even_odd(wid: str, endpoint: str, sk: str, page_start: int = 1, p
             consec_timeouts = 0
             reached_boundary = False
 
-            for pn in range(page_start, 70, page_step):
+            for pn in range(page_start, 251, page_step):
                 scraper_controller.wait_if_paused()
                 search_url = f"{COMBINED_SEARCH_URL}&page={pn}"
                 st["page"] = pn
@@ -1491,7 +1379,7 @@ def run_worker_even_odd(wid: str, endpoint: str, sk: str, page_start: int = 1, p
                         consec_past += 1
                         stats[sk + "_skip"] += 1
                         st["skips"] = stats[sk + "_skip"]
-                        if consec_past >= 4:
+                        if (consec_past >= 12 and pn >= 120) or consec_past >= 20 or pn >= 251:
                             print(f"[Worker {wid}] Reached jobs older than target range ({posted_raw} > {max_days} days) -> Sweep complete!", flush=True)
                             reached_boundary = True
                             break
@@ -1566,6 +1454,11 @@ def run_worker_even_odd(wid: str, endpoint: str, sk: str, page_start: int = 1, p
             stats["sweep"] = max(stats["sweep"], sweep_count)
             cooldown_sec = get_inter_sweep_cooldown()  # User configured: 15s inter-sweep rest
             print(f"\n☕ [Worker {wid}] Sweep #{sweep_count-1} completed ({label}).", flush=True)
+            if sweep_count > MAX_SWEEPS:
+                print(f"🏁 [Worker {wid}] Target {MAX_SWEEPS} sweeps completed for yesterday and 2 days ago ({daily_db_manager.target_dates}). Stopping worker cleanly!", flush=True)
+                st["action"] = f"Finished ({MAX_SWEEPS} Sweeps Completed)"
+                st["online"] = False
+                break
             print(f"    Resting for {cooldown_sec}s before next sweep pass...", flush=True)
             st["action"] = f"Cooldown ({cooldown_sec}s)"
             time.sleep(cooldown_sec)
@@ -1710,12 +1603,34 @@ def main():
         time.sleep(20)
         daily_db_manager.check_and_perform_rollover()
 
-        # Self-healing thread watcher for both single-tab workers
+        # Check if all active workers have completed MAX_SWEEPS
+        a_finished = "Finished" in scraper_manager.worker_a_status.get("action", "")
+        b_finished = "Finished" in scraper_manager.worker_b_status.get("action", "")
+        if (a_finished and b_finished) or stats.get("sweep", 1) > MAX_SWEEPS:
+            print(f"\n🎉 [SUPERVISOR] All workers completed {MAX_SWEEPS} full sweeps for {daily_db_manager.target_dates}!", flush=True)
+            print("🚀 Generating final golden format HTML reports matching reference standards...", flush=True)
+            try:
+                from align_and_release_yesterday import align_and_release
+                align_and_release(require_reviews_only=False)
+                align_and_release(require_reviews_only=True)
+                print("✅ [FINAL REPORT] All reports compiled and released successfully!", flush=True)
+            except Exception as e:
+                print(f"[FINAL REPORT ERR] {e}", flush=True)
+            daily_db_manager.store.finish_run(daily_db_manager.run_id)
+            scraper_manager.is_running = False
+            update_live_dashboard_status()
+            print("🏁 [PIPELINE COMPLETE] Scraper pipeline finished cleanly after 2 sweeps.", flush=True)
+            break
+
+        # Self-healing thread watcher for both single-tab workers (do not respawn finished workers)
         cfg_workers = [
             ("A", "http://127.0.0.1:9222", "a", 1, 2, "Chrome 9222"),
             ("B", "http://127.0.0.1:9223", "b", 2, 2, "Edge 9223"),
         ]
         for wid, ep, sk, p_start, p_step, desc in cfg_workers:
+            st = scraper_manager.worker_a_status if wid == "A" else scraper_manager.worker_b_status
+            if "Finished" in st.get("action", ""):
+                continue
             if (wid not in threads or not threads[wid].is_alive()) and is_endpoint_ready(ep):
                 print(f"🚀 [SUPERVISOR] Respawning Worker {wid} on {desc}...", flush=True)
                 start_worker(wid, ep, sk, p_start, p_step, desc)

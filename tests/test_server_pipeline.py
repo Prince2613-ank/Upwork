@@ -42,7 +42,7 @@ def db(tmp_path, request):
 @pytest.fixture
 def config(tmp_path):
     config = replace(Settings(), data_dir=tmp_path, database_url=f"sqlite:///{tmp_path / 'api.db'}",
-                     password="a-long-test-password", webhook="", chat_space="", token_file=str(tmp_path / "missing.json"))
+                     password="a-long-test-password", password_hash="", session_secure=False, webhook="", chat_space="", token_file=str(tmp_path / "missing.json"))
     config.prepare()
     return config
 
@@ -55,7 +55,7 @@ def result():
     return {"job_id": "~02123", "job_title": '<script>alert("x")</script>',
             "job_url": "https://www.upwork.com/jobs/~02123", "posted_at": "2020-01-02T06:00:00+00:00",
             "posted_date_precision": "exact", "job": {"description": "Real full description"},
-            "client": {"location": "India"}, "client_recent_history": [],
+            "client": {"location": "India"}, "client_recent_history": [{"job_title": "Project", "feedback": "Great client to work with", "rating": "5.0", "freelancer_name": "Alice"}],
             "history_expansion_complete": True, "extraction_status": {"full_reviews": True}}
 
 
@@ -111,7 +111,7 @@ def test_save_persists_snapshot_and_updates_existing(db):
 def test_scheduler_ist_boundary_idempotence_and_restart_catchup(db):
     with db.engine.begin() as c:
         config = db.settings(c)
-        config.update(enabled=True, time="07:00")
+        config.update(enabled=True, time="07:00", timezone="Asia/Kolkata")
         c.execute(update(control).values(settings=config))
     assert schedule_tick(db, datetime(2026, 10, 26, 1, 29, tzinfo=timezone.utc)) is None
     rid = schedule_tick(db, datetime(2026, 10, 26, 1, 30, tzinfo=timezone.utc))
@@ -161,8 +161,8 @@ def test_report_escapes_content_and_marks_partial(db, config):
     filename, partial = build_report(db, config, db.get_run(rid))
     html = (config.data_dir / "reports" / filename).read_text(encoding="utf-8")
     assert partial
-    assert '<script>' not in html
-    assert '&lt;script&gt;' in html
+    assert '<script>alert' not in html
+    assert '\\u003cscript>alert' in html
     assert json.loads((config.data_dir / "reports" / filename).with_suffix(".json").read_text())[0]["job_id"] == "~02123"
     assert safe_csv("  =HYPERLINK()") == "'  =HYPERLINK()"
 
@@ -244,9 +244,11 @@ def test_api_auth_controls_validation_and_csrf(config):
     headers = {"X-Requested-With": "pipeline-dashboard"}
     with TestClient(app) as client:
         assert client.get("/api/status").status_code == 401
-        client.auth = (config.username, config.password)
+        login = client.post('/api/auth/login', json={'username':config.username,'password':config.password}, headers=headers)
+        assert login.status_code == 200
         assert client.get("/").status_code == 200
         assert client.post("/api/runs", json={}).status_code == 403
+        headers['X-CSRF-Token'] = client.cookies.get('flodata_csrf')
         assert client.post("/api/runs", json={"start_date": "2020-02-02", "end_date": "2020-01-01"}, headers=headers).status_code == 422
         assert client.post("/api/runs", json={"start_date": "2020-01-01", "end_date": "2020-01-01", "timezone": "invalid"}, headers=headers).status_code == 422
         rid = client.post("/api/runs", json={"start_date": "2020-01-01", "end_date": "2020-01-01"}, headers=headers).json()["id"]
