@@ -1,1 +1,1 @@
-# Tests package
+"""Regression tests for the production collection flow."""

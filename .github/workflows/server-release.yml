@@ -11,8 +11,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -r requirements-server.txt
-      - run: python -m pytest tests/test_server_pipeline.py -q
+      - run: pip install -r requirements-server.lock
+      - run: python -m pytest tests/test_server_pipeline.py tests/test_production_flow.py tests/test_deployment_transfer.py tests/test_auto_release.py tests/test_files_cleanup.py tests/test_worker_speed.py tests/test_daily_context.py -q
       - name: Image name
         id: image
         shell: bash

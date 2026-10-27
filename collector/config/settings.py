@@ -84,9 +84,12 @@ class Settings:
             except Exception as e:
                 print(f"Warning: Could not parse {self.config_path} ({e}). Using defaults.")
 
-        # Ensure output directory exists
-        self.output_path.mkdir(parents=True, exist_ok=True)
-        self.debug_snapshots_path.mkdir(parents=True, exist_ok=True)
+        # Ensure output directory exists if writable
+        try:
+            self.output_path.mkdir(parents=True, exist_ok=True)
+            self.debug_snapshots_path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
 
     @property
     def output_path(self) -> Path:

@@ -1,11 +1,54 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Flodata collection control</title><link rel="stylesheet" href="/dashboard.css"><script src="/dashboard.js" defer></script></head>
-<body><header><div><small>FLODATA / UPWORK INTELLIGENCE</small><h1>Collection control</h1></div><span id="connection">Connecting…</span></header>
-<p id="message" role="status" aria-live="polite"></p>
-<main><section><h2>Collect a date window</h2><form id="launch"><label>From<input name="start_date" type="date" required></label><label>Through<input name="end_date" type="date" required></label><button>Start two workers</button></form><p>One run at a time. Worker A: port 9222. Worker B: port 9223. Each targets 5–7 jobs/minute.</p></section>
-<section><h2>Daily schedule & delivery</h2><form id="schedule"><label class="check"><input name="enabled" type="checkbox">Enable daily collection</label><label>Start time<input name="time" type="time" required></label><label>Timezone<input name="timezone" value="Asia/Kolkata" required></label><label>Date mode<select name="mode"><option value="yesterday">Yesterday</option><option value="rolling">Last N completed days</option><option value="custom">Fixed date window</option></select></label><label>Number of days<input name="days" type="number" min="1" max="31" value="1"></label><label>Fixed start<input name="start_date" type="date"></label><label>Fixed end<input name="end_date" type="date"></label><label>Jobs/min per worker<input name="jobs_per_minute" type="number" min="5" max="7" value="6"></label><label>Seconds between search pages<input name="search_delay_seconds" type="number" min="5" max="120" value="10"></label><label class="check"><input name="deliver_to_chat" type="checkbox">Send issue alerts and HTML reports to Google Chat</label><button>Save settings</button></form><p id="chat-status"></p></section>
-<section><h2>Browser sessions</h2><p>Log in once on each browser. Sessions are reused until Upwork expires them. Pause collection and wait for both workers before taking control. Click Release remote control when finished, then Resume.</p><p id="remote-state"></p><div id="workers"></div><div class="actions"><button data-browser="A">Open browser A / Login</button><button data-browser="B">Open browser B / Login</button><button id="release-remote">Release remote control</button><button data-restart="A">Restart browser A</button><button data-restart="B">Restart browser B</button></div></section>
-<section class="wide"><h2>Runs & reports</h2><div id="runs"></div></section>
-<section class="wide"><h2>Saved jobs</h2><form id="filter"><label>From<input name="start" type="date"></label><label>Through<input name="end" type="date"></label><label>Search<input name="search" placeholder="Title, skill, client…"></label><button>Find jobs</button></form><div id="jobs"></div><div class="actions"><button id="prev">Previous</button><button id="next">Next 50</button></div></section>
-<section class="wide"><h2>Events</h2><pre id="events"></pre></section></main></body></html>
+<!DOCTYPE html>
+
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/>
+<title>Upwork dashboard</title><link href="/dashboard.css" rel="stylesheet"/><script defer="" src="/dashboard.js"></script></head>
+<body data-page="overview">
+<header class="topbar">
+
+<nav aria-label="Dashboard sections" id="tabs" role="tablist">
+<button aria-selected="true" data-tab="overview" role="tab">Overview</button>
+<button aria-selected="false" data-tab="collection" role="tab">Collection</button>
+<button aria-selected="false" data-tab="files" role="tab">Files</button><button aria-selected="false" data-tab="browsers" role="tab">Browsers</button>
+<button aria-selected="false" data-tab="settings" role="tab">Schedule</button>
+</nav>
+<div class="actions header-actions"><div aria-label="Collection controls" class="navbar-run" hidden="" id="run-controls"><p id="controlled-run"></p><p class="muted" id="control-guidance"></p></div><div class="actions" id="control-actions"></div><span aria-label="Connecting" aria-live="polite" class="sr-only" id="connection" role="status" title="Connecting"><span class="sr-only">Connecting</span></span><button class="clean-button" data-clear-view="" title="Delete the latest collection from Saved Jobs. Stop it first. HTML files are retained." type="button">Clean</button><button aria-label="Sign out" class="icon-button" id="logout" title="Sign out"><svg aria-hidden="true" fill="none" height="18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewBox="0 0 24 24" width="18"><path d="M9 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"></path><path d="m16 17 5-5-5-5M21 12H9"></path></svg></button></div>
+</header>
+<p aria-live="polite" hidden="" id="message" role="status"></p>
+<main>
+<section aria-label="Overview" class="tab" id="tab-overview" role="tabpanel">
+<p aria-live="polite" class="muted" id="analytics-context"></p>
+<div class="kpis" id="kpis"></div>
+<div class="overview-body"><div class="card overview-speed"><div class="speed-head"><h2>Saving speed</h2><div class="inline"><span class="muted speed-period">Last 15 minutes</span><span class="pill ok" id="speed-updated">Live</span></div></div>
+<div class="kpis" id="speed-kpis"></div><div class="chart" id="chart-speed"></div></div><div class="card overview-countries"><h2>Client countries</h2><div class="chart" id="chart-countries"></div></div></div></section>
+<section aria-label="Collection" class="tab" hidden="" id="tab-collection" role="tabpanel">
+<div class="page-toolbar"><form class="inline" id="launch"><label>From<input name="start_date" required="" type="date"/></label><label>To<input name="end_date" required="" type="date"/></label><button>Start two workers</button></form><p class="muted" id="launch-availability" role="status"></p></div>
+<div class="card"><h2>Current collection</h2><p class="muted" id="collection-context"></p><div class="metrics" id="summary"><p class="muted">Select a completed date window to begin.</p></div><div class="progress" hidden="" id="progress"><div id="progress-bar"></div></div><p class="muted" id="run-guidance"></p></div>
+<div class="card"><h2>Live fetching</h2><div class="feed" id="live-feed"><p class="muted">Newly saved jobs will appear here automatically.</p></div></div><div aria-label="Saved jobs" class="collection-jobs" id="collection-jobs"><h2>Saved jobs</h2>
+<div class="page-toolbar"><form class="inline" id="filter"><label>From<input name="start" type="date"/></label><label>To<input name="end" type="date"/></label><label class="grow">Search<input name="search" placeholder="Title, skill, client…" type="search"/></label><button>Search</button></form></div>
+<p class="muted" id="jobs-context"></p><div class="jobs" id="jobs"></div>
+<div class="actions pager"><button class="ghost" id="prev">Previous</button><span class="muted" id="page-label"></span><button class="ghost" id="next">Next 50</button></div></div>
+</section>
+<section aria-label="Browser sessions" class="tab" hidden="" id="tab-browsers" role="tabpanel"><div class="card speed-settings"><h2>Scraper speed</h2><form class="inline" id="worker-speed"><label>Jobs/min per worker<input id="worker-speed-rate" max="20" min="1" name="jobs_per_minute" required="" step="1" type="number" value="6"/></label><button type="submit">Apply speed</button><span aria-live="polite" class="muted" id="worker-speed-current"></span></form><small>Applies to both workers on their next job. Targets are limited by page loading and rate-limit cooldowns.</small></div>
+<div class="card">
+<p class="pill" id="remote-state"></p><div class="workers" id="workers"></div>
+<div class="actions"><button aria-pressed="false" hidden="" id="toggle-browser-windows" type="button">Show both browsers</button><button class="ghost" hidden="" id="take-local-control" type="button">Take control / Login</button><button data-browser="A">Open browser A / Login</button><button data-browser="B">Open browser B / Login</button><button class="ghost" id="release-remote">Release remote control</button><button class="ghost" data-restart="A">Restart A</button><button class="ghost" data-restart="B">Restart B</button></div></div>
+<div class="card history-card"><h2>Collection history</h2><div aria-label="Collection history" tabindex="0" id="runs"></div></div></section>
+<section aria-label="Daily schedule &amp; delivery" class="tab" hidden="" id="tab-settings" role="tabpanel">
+<div class="card"><form class="formgrid" id="schedule">
+<label class="check"><input name="enabled" type="checkbox"/>Enable daily collection</label>
+<label>Start time<input name="time" required="" type="time"/></label>
+<label>Timezone<input name="timezone" required="" value="UTC"/></label>
+<label>Date mode<select name="mode"><option value="yesterday">Yesterday</option><option value="rolling">Last N completed days</option><option value="custom">Fixed date window</option></select></label>
+<label>Number of days<input max="31" min="1" name="days" type="number" value="1"/></label>
+<label>Fixed start<input name="start_date" type="date"/></label>
+<label>Fixed end<input name="end_date" type="date"/></label>
+<label>Jobs/min per worker<input max="20" min="1" name="jobs_per_minute" type="number" value="6"/></label>
+<label>Seconds between search pages<input max="120" min="5" name="search_delay_seconds" type="number" value="10"/></label>
+<label class="check wide-field"><input name="deliver_to_chat" type="checkbox"/>Send issue alerts and HTML reports to Google Chat</label>
+<button form="schedule">Save settings</button></form>
+<p class="muted" id="chat-status"></p></div>
+</section>
+<section aria-label="Files" class="tab" hidden="" id="tab-files" role="tabpanel">
+<p aria-live="polite" class="muted files-total" id="files-count"></p><div class="files-grid" aria-label="HTML files" tabindex="0" id="files-list"></div>
+<div class="card"><h2>Prepare or send a report</h2><div id="file-run-actions"><label>Collection<select aria-label="Select collection for actions" id="report-run"></select></label><div class="actions" id="report-actions"></div></div></div></section></main>
+<dialog aria-describedby="clean-confirm-description" aria-labelledby="clean-confirm-title" class="confirm-dialog" id="clean-confirm"><form method="dialog"><span class="confirm-eyebrow">Delete saved jobs</span><h2 id="clean-confirm-title">Clean the latest collection?</h2><p id="clean-confirm-description">This permanently removes the latest collection's jobs from Saved Jobs. HTML reports are kept. Stop the collection before cleaning.</p><div class="confirm-actions"><button autofocus="" class="ghost" value="cancel">Cancel</button><button class="confirm-delete" value="confirm">Clean jobs</button></div></form></dialog></body></html>

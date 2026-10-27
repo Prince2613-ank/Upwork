@@ -16,12 +16,18 @@ from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from collector.config.settings import settings
+from collector.storage.central import CentralStore, database_path, date_clause, iter_job_rows
 from collector.models.schema import CollectedJob
 from collector.main import CollectorEngine
 from collector.logging.logger import logger, error_logger
 from generate_standalone_report import clean_freelancer_review
 
 app = FastAPI(title="Upwork Job Intelligence Collector Dashboard")
+
+@app.on_event("startup")
+def initialize_central_database():
+    CentralStore(database_path(settings.output_path)).initialize()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -92,11 +98,7 @@ def trigger_compile_active_report(payload: Optional[Dict[str, Any]] = None):
     e_date = req.get("end_date") or daily_db_manager.target_date
     rev_only = req.get("reviews_only") if req.get("reviews_only") is not None else scraper_controller.reviews_only
 
-    ptoday = settings.output_path / "database_today.db"
-    if not ptoday.exists():
-        ptoday = settings.output_path / f"database_daily_{e_date}.db"
-    if not ptoday.exists():
-        ptoday = settings.output_path / "database.db"
+    ptoday = database_path(settings.output_path)
 
     out_html = settings.output_path / "upwork_active_report.html"
     root_html = PROJECT_ROOT / "upwork_active_report.html"
@@ -148,83 +150,8 @@ def trigger_generate_yesterday_report():
 @app.get("/jobs_today.csv")
 @app.get("/jobs_yesterday.csv")
 def export_daily_csv():
-    """Serves the daily jobs CSV export or generates on-the-fly."""
-    import shutil
-    import tempfile
-    import csv
-    import json
-    import sqlite3
-
-    for p in [
-        PROJECT_ROOT / "output" / "jobs_yesterday.csv",
-        PROJECT_ROOT / "jobs_yesterday.csv",
-        PROJECT_ROOT / "output" / "jobs_today.csv",
-        PROJECT_ROOT / "jobs_today.csv"
-    ]:
-        if p.exists() and p.stat().st_size > 50:
-            return FileResponse(p, media_type="text/csv", filename="jobs_daily_export.csv")
-
-    db_candidates = [
-        PROJECT_ROOT / "output" / "database_yesterday.db",
-        PROJECT_ROOT / "output" / "database_today.db",
-        PROJECT_ROOT / "output" / "database_1week.db",
-        PROJECT_ROOT / "output" / "database.db"
-    ]
-    target_db = None
-    for db in db_candidates:
-        if db.exists():
-            target_db = db
-            break
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
-    headers = [
-        "job_id", "job_title", "job_url", "job_description", "skills",
-        "client_location", "client_payment_verified", "budget", "budget_type",
-        "experience_level", "client_rating", "client_total_spent", "client_jobs_posted",
-        "client_hire_rate", "client_total_hires", "client_active_hires", "client_hours_billed",
-        "client_member_since", "reviews_count", "posted_at", "posted_raw"
-    ]
-    with open(tmp.name, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
-        if target_db:
-            try:
-                conn = sqlite3.connect(f"file:{target_db.resolve()}?mode=ro", uri=True)
-                rows = conn.execute("SELECT job_id, job_json FROM jobs").fetchall()
-                conn.close()
-                for jid, jj_str in rows:
-                    try:
-                        d = json.loads(jj_str)
-                        job_dict = d.get("job") or {}
-                        client_dict = d.get("client") or {}
-                        writer.writerow([
-                            jid,
-                            d.get("job_title") or "",
-                            d.get("job_url") or "",
-                            job_dict.get("description") or d.get("description") or "",
-                            ", ".join(job_dict.get("skills") or d.get("skills") or []),
-                            client_dict.get("location") or "",
-                            "1" if client_dict.get("payment_verified") else "0",
-                            d.get("budget_min") or job_dict.get("budget") or "Not Specified",
-                            d.get("job_type") or "Fixed",
-                            d.get("experience_level") or "Intermediate",
-                            client_dict.get("rating") or "N/A",
-                            client_dict.get("total_spent") or "N/A",
-                            client_dict.get("jobs_posted") or "N/A",
-                            client_dict.get("hire_rate") or "N/A",
-                            client_dict.get("total_hires") or "N/A",
-                            client_dict.get("active_hires") or "N/A",
-                            client_dict.get("hours_billed") or "N/A",
-                            client_dict.get("member_since") or "N/A",
-                            len(d.get("client_recent_history") or []),
-                            d.get("posted_at") or "",
-                            d.get("posted_raw") or ""
-                        ])
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-    return FileResponse(tmp.name, media_type="text/csv", filename="jobs_daily_export.csv")
+    """Exports the selected window from the permanent database."""
+    return export_custom_filtered_csv(reviews_only=False)
 
 
 @app.get("/report/view", response_class=FileResponse)
@@ -255,9 +182,9 @@ def compile_report(
     s_date = start_date or daily_db_manager.earliest_date
     e_date = end_date or daily_db_manager.target_date
 
-    target_db = settings.output_path / "database_today.db"
+    target_db = database_path(settings.output_path)
     if not target_db.exists():
-        target_db = settings.output_path / "database.db"
+        target_db = database_path(settings.output_path)
 
     out_html = settings.output_path / "upwork_intelligence_report.html"
     title = f"Upwork Verified Intelligence ({s_date} to {e_date})"
@@ -346,16 +273,15 @@ _cache_live_feed = {"time": 0, "data": None}
 
 
 def get_metrics_for_range(start_date: str, end_date: str, reviews_only: bool = True):
-    db_path = settings.output_path / "database_today.db"
-    if not db_path.exists():
-        db_path = settings.output_path / "database.db"
+    db_path = database_path(settings.output_path)
     if not db_path.exists():
         return {"total": 0, "reviews": 0, "avg_rating": "5.0", "spend": "$0"}
 
     try:
         conn = sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True, timeout=2.0)
         c = conn.cursor()
-        c.execute("SELECT job_json FROM jobs")
+        where, params = date_clause(start_date, end_date)
+        c.execute("SELECT job_json FROM jobs" + where, params)
         rows = c.fetchall()
         conn.close()
 
@@ -465,7 +391,7 @@ def get_status(
         "total_spend": metrics["spend"],
         "rate_per_min": daily_db_manager.get_rolling_rate_per_min(),
         "jobs_count_today": metrics["total"],
-        "jobs_count_1week": _get_db_count(settings.output_path / "database_1week.db"),
+        "jobs_count_1week": _get_db_count(database_path(settings.output_path)),
         "jobs_count_14days": 28137,
         "jobs_count_1month": 29932,
         "date_cutoff": window_label,
@@ -488,7 +414,7 @@ def get_status(
 
 @app.get("/api/live-feed")
 def get_live_feed():
-    """Returns the most recent verified jobs directly from database_1week.db or database_14days.db."""
+    """Returns recent verified jobs from the permanent database."""
     global _cache_live_feed
     now = time.time()
     if _cache_live_feed["data"] is not None and (now - _cache_live_feed["time"]) < 2.0:
@@ -497,9 +423,9 @@ def get_live_feed():
     jobs = []
     seen_ids = set()
 
-    ptoday = settings.output_path / "database_today.db"
-    p1w = settings.output_path / "database_1week.db"
-    p14 = settings.output_path / "database_14days.db"
+    ptoday = database_path(settings.output_path)
+    p1w = database_path(settings.output_path)
+    p14 = database_path(settings.output_path)
     if ptoday.exists() and _get_db_count(ptoday) > 0:
         target_dbs = [ptoday]
     elif p1w.exists():
@@ -587,9 +513,7 @@ def get_collected_jobs(
     e_date = end_date or daily_db_manager.target_date
     r_only = reviews_only if reviews_only is not None else scraper_controller.reviews_only
 
-    db_file = settings.output_path / "database_today.db"
-    if not db_file.exists():
-        db_file = settings.output_path / "database.db"
+    db_file = database_path(settings.output_path)
 
     jobs_map = {}
 
@@ -598,7 +522,8 @@ def get_collected_jobs(
             conn = sqlite3.connect(f"file:{db_file.resolve()}?mode=ro", uri=True, timeout=3)
             c = conn.cursor()
             fetch_limit = min(limit, 5000)
-            c.execute("SELECT job_id, job_json FROM jobs ORDER BY rowid DESC LIMIT ?", (fetch_limit,))
+            where, params = date_clause(s_date, e_date)
+            c.execute("SELECT job_id, job_json FROM jobs" + where + " ORDER BY posted_date DESC, rowid DESC LIMIT ?", (*params, max(1, fetch_limit)))
             for row in c.fetchall():
                 try:
                     j = json.loads(row[1])
@@ -665,7 +590,7 @@ def get_job_detail(job_id: str):
     clean = job_id.lstrip("~").strip("/")
 
     # 0. Check database_today.db first
-    ptoday = settings.output_path / "database_today.db"
+    ptoday = database_path(settings.output_path)
     if ptoday.exists():
         try:
             conn = sqlite3.connect(f"file:{ptoday.resolve()}?mode=ro", uri=True, timeout=2)
@@ -682,7 +607,7 @@ def get_job_detail(job_id: str):
             pass
 
     # 1. Check database_1week.db
-    p1w = settings.output_path / "database_1week.db"
+    p1w = database_path(settings.output_path)
     if p1w.exists():
         try:
             conn = sqlite3.connect(f"file:{p1w.resolve()}?mode=ro", uri=True, timeout=2)
@@ -699,7 +624,7 @@ def get_job_detail(job_id: str):
             pass
 
     # 2. Check database_14days.db
-    p14 = settings.output_path / "database_14days.db"
+    p14 = database_path(settings.output_path)
     if p14.exists():
         try:
             conn = sqlite3.connect(f"file:{p14.resolve()}?mode=ro", uri=True, timeout=2)
@@ -716,7 +641,7 @@ def get_job_detail(job_id: str):
             pass
 
     # 3. Check database.db
-    p1m = settings.output_path / "database.db"
+    p1m = database_path(settings.output_path)
     if p1m.exists():
         try:
             conn = sqlite3.connect(f"file:{p1m.resolve()}?mode=ro", uri=True, timeout=2)
@@ -773,19 +698,14 @@ def get_job_detail(job_id: str):
 
 
 def _export_today_csv(csv_path: Path):
-    """Exports all jobs from database_today.db to CSV."""
-    ptoday = settings.output_path / "database_today.db"
-    if not ptoday.exists():
-        ptoday = PROJECT_ROOT / "output" / "database_today.db"
+    """Exports the selected date window from the permanent database."""
+    ptoday = database_path(settings.output_path)
     if not ptoday.exists():
         return
     import csv
     try:
-        conn = sqlite3.connect(f"file:{ptoday.resolve()}?mode=ro", uri=True, timeout=5)
-        c = conn.cursor()
-        c.execute("SELECT job_id, job_json FROM jobs ORDER BY rowid DESC")
-        rows = c.fetchall()
-        conn.close()
+        from run_daily_system import daily_db_manager
+        rows = iter_job_rows(ptoday, daily_db_manager.earliest_date, daily_db_manager.target_date)
 
         fieldnames = [
             "job_id", "job_title", "job_url", "posted_raw", "client_location",
@@ -822,17 +742,15 @@ def _export_today_csv(csv_path: Path):
 
 
 def _export_1week_csv(csv_path: Path):
-    """Exports all jobs from database_1week.db to CSV."""
-    p1w = settings.output_path / "database_1week.db"
+    """Exports the last seven completed days from the permanent database."""
+    p1w = database_path(settings.output_path)
     if not p1w.exists():
         return
     import csv
     try:
-        conn = sqlite3.connect(f"file:{p1w.resolve()}?mode=ro", uri=True, timeout=5)
-        c = conn.cursor()
-        c.execute("SELECT job_id, job_json FROM jobs ORDER BY rowid DESC")
-        rows = c.fetchall()
-        conn.close()
+        from datetime import datetime, timedelta
+        end = datetime.now().date() - timedelta(days=1)
+        rows = iter_job_rows(p1w, (end-timedelta(days=6)).isoformat(), end.isoformat())
 
         fieldnames = [
             "job_id", "job_title", "job_url", "posted_raw", "client_location",
@@ -915,8 +833,8 @@ from pydantic import BaseModel
 
 class ScrapeLaunchRequest(BaseModel):
     preset: Optional[str] = "custom"
-    start_date: str = "2026-10-19"
-    end_date: str = "2026-10-20"
+    start_date: str = "2026-10-24"
+    end_date: str = "2026-10-25"
     reviews_only: bool = True
     exclude_today: bool = True
     auto_launch_browsers: bool = True
@@ -972,6 +890,22 @@ def get_scraper_telemetry():
     sc1_active = _check_port_active(9222)
     sc2_active = _check_port_active(9223)
 
+    status_file = settings.output_path / "scraper_live_status.json"
+    disk_data = {}
+    if status_file.exists():
+        try:
+            with open(status_file, "r", encoding="utf-8") as sf:
+                disk_data = json.load(sf)
+        except Exception:
+            pass
+
+    w_a = disk_data.get("worker_a", {})
+    w_b = disk_data.get("worker_b", {})
+
+    worker_a_saved = w_a.get("saved", stats.get("a_new", 0))
+    worker_b_saved = w_b.get("saved", stats.get("b_new", 0))
+    total_captured = worker_a_saved + worker_b_saved
+
     data = {
         "is_running": scraper_controller.is_active and (sc1_active or sc2_active),
         "preset": scraper_controller.current_preset,
@@ -979,30 +913,30 @@ def get_scraper_telemetry():
         "end_date": daily_db_manager.target_date,
         "reviews_only": scraper_controller.reviews_only,
         "exclude_today": scraper_controller.exclude_today,
-        "total_saved": daily_db_manager.daily_saves_count,
-        "rate_per_min": daily_db_manager.get_rolling_rate_per_min(),
-        "sweep": stats.get("sweep", 1),
+        "total_saved": total_captured if total_captured > 0 else daily_db_manager.daily_saves_count,
+        "rate_per_min": disk_data.get("rate_per_min", daily_db_manager.get_rolling_rate_per_min()),
+        "sweep": disk_data.get("sweep", stats.get("sweep", 1)),
         "worker_a": {
             "online": sc1_active,
-            "country": stats.get("st_a", {}).get("country", "Global (Chrome:9222)"),
-            "page": stats.get("st_a", {}).get("page", 1),
-            "action": stats.get("st_a", {}).get("action", "Scanning" if scraper_controller.is_active else "Paused"),
-            "saved": stats.get("a_new", 0),
-            "skips": stats.get("a_skip", 0),
+            "country": w_a.get("country", stats.get("st_a", {}).get("country", "Global (Chrome:9222)")),
+            "page": w_a.get("page", stats.get("st_a", {}).get("page", 1)),
+            "action": w_a.get("action", stats.get("st_a", {}).get("action", "Scanning" if scraper_controller.is_active else "Paused")),
+            "saved": worker_a_saved,
+            "skips": w_a.get("skips", stats.get("a_skip", 0)),
         },
         "worker_b": {
             "online": sc2_active,
-            "country": stats.get("st_b", {}).get("country", "Global (Edge:9223)"),
-            "page": stats.get("st_b", {}).get("page", 2),
-            "action": stats.get("st_b", {}).get("action", "Scanning" if scraper_controller.is_active else "Paused"),
-            "saved": stats.get("b_new", 0),
-            "skips": stats.get("b_skip", 0),
+            "country": w_b.get("country", stats.get("st_b", {}).get("country", "Global (Edge:9223)")),
+            "page": w_b.get("page", stats.get("st_b", {}).get("page", 2)),
+            "action": w_b.get("action", stats.get("st_b", {}).get("action", "Scanning" if scraper_controller.is_active else "Paused")),
+            "saved": worker_b_saved,
+            "skips": w_b.get("skips", stats.get("b_skip", 0)),
         },
         "recent_logs": [
             f"[Dashboard] Operating on target window: {daily_db_manager.earliest_date} to {daily_db_manager.target_date} ({len(daily_db_manager.target_dates)} days)",
             f"[Quality Filter] Full Freelancer Reviews Only: {'ON' if scraper_controller.reviews_only else 'OFF'} | Exclude Today: {'ON' if scraper_controller.exclude_today else 'OFF'}",
             f"[Status] Engine {'RUNNING ⚡' if scraper_controller.is_active else 'PAUSED ⏸️'} | Active DB: {daily_db_manager.active_db_path.name}",
-            f"[Telemetry] Chrome :9222 {'ONLINE' if sc1_active else 'STANDBY'} | Edge :9223 {'ONLINE' if sc2_active else 'STANDBY'} | Speed: {daily_db_manager.get_rolling_rate_per_min()} CPM"
+            f"[Telemetry] Chrome :9222 {'ONLINE' if sc1_active else 'STANDBY'} | Edge :9223 {'ONLINE' if sc2_active else 'STANDBY'} | Speed: {disk_data.get('rate_per_min', daily_db_manager.get_rolling_rate_per_min())} CPM"
         ]
     }
     return data
@@ -1034,9 +968,7 @@ def export_custom_filtered_csv(
     s_date = start_date or daily_db_manager.earliest_date
     e_date = end_date or daily_db_manager.target_date
 
-    ptoday = settings.output_path / "database_today.db"
-    if not ptoday.exists():
-        ptoday = settings.output_path / "database.db"
+    ptoday = database_path(settings.output_path)
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".csv")
     headers = [
@@ -1052,9 +984,7 @@ def export_custom_filtered_csv(
         writer.writerow(headers)
         if ptoday.exists():
             try:
-                conn = sqlite3.connect(f"file:{ptoday.resolve()}?mode=ro", uri=True)
-                rows = conn.execute("SELECT job_id, job_json FROM jobs ORDER BY rowid DESC").fetchall()
-                conn.close()
+                rows = iter_job_rows(ptoday, s_date, e_date)
                 for jid, jj_str in rows:
                     try:
                         d = json.loads(jj_str)

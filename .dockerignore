@@ -1,5 +1,6 @@
 .git
 .server-deps
+.venv
 .env*
 output*
 data
@@ -10,6 +11,7 @@ __pycache__
 *.log
 *.html
 !server/static/index.html
+!server/static/login.html
 jobs_*.csv
 scratch
 deploy/secrets

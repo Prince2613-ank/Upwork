@@ -227,224 +227,8 @@ def clean_freelancer_review(raw_fb, fl_name=""):
     return fl_text
 
 
-def generate_report(
-    jobs_csv_path: str = "./output/jobs.csv",
-    history_csv_path: str = "./output/client_history.csv",
-    output_html: str = "./output/upwork_intelligence_report.html",
-    date_filter_start: str = None,
-    date_filter_end: str = None,
-    report_title: str = None,
-    db_path: str = "./output/database_14days.db",
-    require_reviews_only: bool = False
-):
-    print("Loading fallback client reviews history from CSV...", flush=True)
-    csv_reviews_by_job = {}
-
-    hist_file = Path(history_csv_path) if history_csv_path else None
-    if hist_file and hist_file.exists() and not (db_path and ("today" in str(db_path).lower() or "daily" in str(db_path).lower())):
-        with open(hist_file, "r", encoding="utf-8-sig", errors="replace") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                jid = row.get("parent_job_id") or ""
-                if not jid:
-                    continue
-                raw_htitle = (row.get("history_job_title") or "").strip()
-                if not raw_htitle or "past milestone assignment" in raw_htitle.lower():
-                    continue
-                htitle = raw_htitle
-                if htitle.lower().startswith("rating is") or "no feedback" in htitle.lower() or htitle.lower() in ["none", "completed", "n/a"]:
-                    htitle = "Completed Project"
-
-                date = (row.get("date") or "").strip()
-                if "present" in date.lower() or "progress" in date.lower():
-                    continue  # Strictly skip in-progress
-                
-                raw_fb = row.get("feedback") or ""
-                fl = (row.get("freelancer_name") or "").strip()
-                cleaned = clean_freelancer_review(raw_fb, fl)
-                if not cleaned:
-                    continue  # Strictly skip blank / no feedback
-                
-                norm_jid = jid.replace("~02", "").replace("~", "")
-                rev_item = {
-                    "job_title": htitle,
-                    "feedback": cleaned,
-                    "rating": row.get("rating") or "5.0",
-                    "date": date,
-                    "amount": row.get("amount") or "",
-                    "freelancer": fl
-                }
-                
-                for target_key in (jid, norm_jid):
-                    if target_key not in csv_reviews_by_job:
-                        csv_reviews_by_job[target_key] = []
-                    # Deduplicate by (job_title, feedback, freelancer)
-                    if not any(r["feedback"].lower() == cleaned.lower() for r in csv_reviews_by_job[target_key]):
-                        if len(csv_reviews_by_job[target_key]) < 25:
-                            csv_reviews_by_job[target_key].append(rev_item)
-
-    print(f"Loaded {sum(len(v) for v in csv_reviews_by_job.values()) // 2} fallback reviews from CSV.", flush=True)
-
-    db_file = Path(db_path)
-    print(f"Loading jobs dataset from SQLite {db_file.name}...", flush=True)
-    jobs_data = []
-    countries_set = set()
-    dates_set = set()
-    verified_count = 0
-    total_stars = 0.0
-    rating_count = 0
-
-    if db_file.exists():
-        import sqlite3
-        conn = sqlite3.connect(str(db_file), timeout=30)
-        c = conn.cursor()
-        has_raw = False
-        try:
-            cols = [col[1] for col in c.execute("PRAGMA table_info(jobs)").fetchall()]
-            has_raw = "raw_html" in cols
-        except Exception:
-            pass
-        if has_raw:
-            rows = c.execute("SELECT job_id, job_json, raw_html FROM jobs").fetchall()
-        else:
-            rows = [(r[0], r[1], None) for r in c.execute("SELECT job_id, job_json FROM jobs").fetchall()]
-        conn.close()
-
-        for jid, raw_j, raw_html in rows:
-            try:
-                d = json.loads(raw_j)
-                job_dict = d.get("job") or {}
-                client_dict = d.get("client") or {}
-
-                posted = d.get("posted_at") or d.get("posted_raw") or ""
-                posted_date = posted[:10]
-                if date_filter_start and posted_date < date_filter_start:
-                    continue
-                if date_filter_end and posted_date > date_filter_end:
-                    continue
-
-                if posted_date:
-                    dates_set.add(posted_date)
-
-                desc = (job_dict.get("description") or d.get("description") or "").strip()
-                if raw_html:
-                    desc = restore_full_description_from_raw(desc, raw_html)
-                if not desc:
-                    continue  # Guarantee no empty description
-
-                title = (d.get("job_title") or job_dict.get("title") or d.get("title") or "Untitled Job").strip()
-                url = d.get("job_url") or f"https://www.upwork.com/jobs/{jid}"
-                posted = d.get("posted_at") or d.get("posted_raw") or ""
-                posted_raw = d.get("posted_raw") or ""
-                loc = format_location((client_dict.get("location") or d.get("client_location") or "Unknown").strip())
-
-                norm_jid = jid.replace("~02", "").replace("~", "")
-                # Priority 1: Extract complete descriptive freelancer reviews from authentic DB history
-                db_hist = d.get("client_recent_history") or []
-                job_revs = []
-                seen_reviews = set()
-                seen_feedbacks = set()
-                for h in db_hist:
-                    raw_htitle = (h.get("job_title") or "").strip()
-                    if not raw_htitle or "past milestone assignment" in raw_htitle.lower():
-                        continue
-                    htitle = raw_htitle
-                    if htitle.lower().startswith("rating is") or "no feedback" in htitle.lower() or htitle.lower() in ["none", "completed", "n/a"]:
-                        htitle = "Completed Project"
-
-                    date = (h.get("date") or "").strip()
-                    if "present" in date.lower() or "progress" in date.lower():
-                        continue  # Strictly skip in-progress
-                    raw_fb = h.get("feedback") or ""
-                    fl = (h.get("freelancer_name") or "").strip()
-                    if raw_html and (raw_fb.endswith("...") or raw_fb.endswith("…") or "\u2026" in raw_fb):
-                        raw_fb = restore_full_feedback_from_raw(raw_fb, raw_html)
-                    cleaned = clean_freelancer_review(raw_fb, fl)
-                    if not cleaned:
-                        continue  # Strictly skip blank / no feedback
-                    
-                    dedup_key = (htitle.lower(), cleaned.lower(), fl.lower())
-                    if dedup_key in seen_reviews:
-                        continue
-                    seen_reviews.add(dedup_key)
-
-                    fb_key = cleaned.lower()[:80]
-                    if fb_key in seen_feedbacks:
-                        continue
-                    seen_feedbacks.add(fb_key)
-
-                    job_revs.append({
-                        "job_title": htitle,
-                        "feedback": cleaned,
-                        "rating": h.get("rating") or "5.0",
-                        "date": date,
-                        "amount": h.get("amount") or "",
-                        "freelancer": fl
-                    })
-                    if len(job_revs) >= 25:
-                        break
-
-                # Priority 2: Fallback to CSV if DB had no history
-                if not job_revs:
-                    job_revs = csv_reviews_by_job.get(jid) or csv_reviews_by_job.get(norm_jid) or []
-
-                if require_reviews_only and not job_revs:
-                    continue
-
-                if loc and loc != "Unknown":
-                    if "," in loc:
-                        countries_set.add(loc.split(",")[0].strip())
-                    else:
-                        countries_set.add(loc)
-
-                pv = bool(client_dict.get("payment_verified", True))
-                if pv:
-                    verified_count += 1
-
-                rat_str = str(client_dict.get("rating") or "")
-                try:
-                    val = float(rat_str.split()[0].replace("/5", ""))
-                    if val > 0:
-                        total_stars += val
-                        rating_count += 1
-                except Exception:
-                    pass
-
-                skills_list = job_dict.get("skills") or d.get("skills") or []
-                if isinstance(skills_list, str):
-                    try:
-                        skills_list = json.loads(skills_list)
-                    except Exception:
-                        skills_list = [s.strip() for s in skills_list.split(",") if s.strip()]
-
-                jobs_data.append({
-                    "id": jid,
-                    "title": title,
-                    "url": url,
-                    "posted": posted,
-                    "posted_raw": posted_raw,
-                    "location": loc,
-                    "verified": pv,
-                    "rating": client_dict.get("rating") or "N/A",
-                    "spend": client_dict.get("total_spent") or "N/A",
-                    "jobs_posted": client_dict.get("jobs_posted") or "N/A",
-                    "hire_rate": client_dict.get("hire_rate") or "N/A",
-                    "total_hires": client_dict.get("total_hires") or "N/A",
-                    "active_hires": client_dict.get("active_hires") or "N/A",
-                    "hours_billed": client_dict.get("hours_billed") or "N/A",
-                    "member_since": client_dict.get("member_since") or "N/A",
-                    "client_type": client_dict.get("client_type") or "",
-                    "budget": (d.get("budget_min") and f"${d.get('budget_min')}") or job_dict.get("budget") or "Not Specified",
-                    "budget_type": d.get("job_type") or "Fixed",
-                    "experience": d.get("experience_level") or "Intermediate",
-                    "description": desc,
-                    "skills": skills_list,
-                    "reviews": job_revs,
-                    "total_reviews": len(job_revs),
-                })
-            except Exception:
-                pass
-
+def render_report_html(jobs_data, countries_set, dates_set, verified_count, total_stars, rating_count, report_title=None):
+    """Renders the standalone interactive explorer for already-prepared job records."""
     # Strict Integrity verification
     empty_desc = sum(1 for j in jobs_data if not (j.get("description") or "").strip())
     print(f"Description Integrity Audit: {len(jobs_data):,} populated | Exactly {empty_desc} empty descriptions (100.0% Complete)", flush=True)
@@ -457,7 +241,7 @@ def generate_report(
 
     print(f"Loaded {len(jobs_data)} jobs across {len(countries_set)} countries. Compiling single HTML file...", flush=True)
 
-    jobs_json_str = json.dumps(jobs_data).replace("</script>", "<\\/script>")
+    jobs_json_str = json.dumps(jobs_data).replace("<", "\\u003c")
     countries_list = sorted(list(countries_set))
     dates_list = sorted(list(dates_set), reverse=True)
 
@@ -1290,7 +1074,7 @@ def generate_report(
 
                 tr.innerHTML = `
                     <td class="job-title-col">
-                        <a href="${{job.url}}" target="_blank" class="job-title-link" onclick="event.stopPropagation();">${{escapeHtml(job.title)}}</a>
+                        <a href="${{escapeHtml(job.url)}}" target="_blank" rel="noopener noreferrer" class="job-title-link" onclick="event.stopPropagation();">${{escapeHtml(job.title)}}</a>
                         <div class="job-desc-snippet" title="Click row to inspect full un-truncated description in drawer">${{escapeHtml(previewText)}}</div>
                         <div style="margin-top: 0.35rem;">${{skillsHtml}}${{moreSkills}}</div>
                     </td>
@@ -1545,6 +1329,226 @@ def generate_report(
 </body>
 </html>
 """
+    return html_content
+
+
+def generate_report(
+    jobs_csv_path: str = "./output/jobs.csv",
+    history_csv_path: str = "./output/client_history.csv",
+    output_html: str = "./output/upwork_intelligence_report.html",
+    date_filter_start: str = None,
+    date_filter_end: str = None,
+    report_title: str = None,
+    db_path: str = "./output/database.db",
+    require_reviews_only: bool = False
+):
+    print("Loading fallback client reviews history from CSV...", flush=True)
+    csv_reviews_by_job = {}
+
+    hist_file = Path(history_csv_path) if history_csv_path else None
+    if hist_file and hist_file.exists() and not (db_path and ("today" in str(db_path).lower() or "daily" in str(db_path).lower())):
+        with open(hist_file, "r", encoding="utf-8-sig", errors="replace") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                jid = row.get("parent_job_id") or ""
+                if not jid:
+                    continue
+                raw_htitle = (row.get("history_job_title") or "").strip()
+                if not raw_htitle or "past milestone assignment" in raw_htitle.lower():
+                    continue
+                htitle = raw_htitle
+                if htitle.lower().startswith("rating is") or "no feedback" in htitle.lower() or htitle.lower() in ["none", "completed", "n/a"]:
+                    htitle = "Completed Project"
+
+                date = (row.get("date") or "").strip()
+                if "present" in date.lower() or "progress" in date.lower():
+                    continue  # Strictly skip in-progress
+
+                raw_fb = row.get("feedback") or ""
+                fl = (row.get("freelancer_name") or "").strip()
+                cleaned = clean_freelancer_review(raw_fb, fl)
+                if not cleaned:
+                    continue  # Strictly skip blank / no feedback
+
+                norm_jid = jid.replace("~02", "").replace("~", "")
+                rev_item = {
+                    "job_title": htitle,
+                    "feedback": cleaned,
+                    "rating": row.get("rating") or "5.0",
+                    "date": date,
+                    "amount": row.get("amount") or "",
+                    "freelancer": fl
+                }
+
+                for target_key in (jid, norm_jid):
+                    if target_key not in csv_reviews_by_job:
+                        csv_reviews_by_job[target_key] = []
+                    # Deduplicate by (job_title, feedback, freelancer)
+                    if not any(r["feedback"].lower() == cleaned.lower() for r in csv_reviews_by_job[target_key]):
+                        if len(csv_reviews_by_job[target_key]) < 25:
+                            csv_reviews_by_job[target_key].append(rev_item)
+
+    print(f"Loaded {sum(len(v) for v in csv_reviews_by_job.values()) // 2} fallback reviews from CSV.", flush=True)
+
+    db_file = Path(db_path)
+    print(f"Loading jobs dataset from SQLite {db_file.name}...", flush=True)
+    jobs_data = []
+    countries_set = set()
+    dates_set = set()
+    verified_count = 0
+    total_stars = 0.0
+    rating_count = 0
+
+    if db_file.exists():
+        import sqlite3
+        conn = sqlite3.connect(str(db_file), timeout=30)
+        c = conn.cursor()
+        has_raw = False
+        try:
+            cols = [col[1] for col in c.execute("PRAGMA table_info(jobs)").fetchall()]
+            has_raw = "raw_html" in cols
+        except Exception:
+            pass
+        conn.close()
+        from collector.storage.central import iter_job_rows
+        rows = iter_job_rows(db_file, date_filter_start, date_filter_end, include_raw=True)
+
+        for jid, raw_j, raw_html in rows:
+            try:
+                d = json.loads(raw_j)
+                job_dict = d.get("job") or {}
+                client_dict = d.get("client") or {}
+
+                posted = d.get("posted_at") or d.get("posted_raw") or ""
+                posted_date = posted[:10]
+                if date_filter_start and posted_date < date_filter_start:
+                    continue
+                if date_filter_end and posted_date > date_filter_end:
+                    continue
+
+                if posted_date:
+                    dates_set.add(posted_date)
+
+                desc = (job_dict.get("description") or d.get("description") or "").strip()
+                if raw_html:
+                    desc = restore_full_description_from_raw(desc, raw_html)
+                if not desc:
+                    continue  # Guarantee no empty description
+
+                title = (d.get("job_title") or job_dict.get("title") or d.get("title") or "Untitled Job").strip()
+                url = d.get("job_url") or f"https://www.upwork.com/jobs/{jid}"
+                posted = d.get("posted_at") or d.get("posted_raw") or ""
+                posted_raw = d.get("posted_raw") or ""
+                loc = format_location((client_dict.get("location") or d.get("client_location") or "Unknown").strip())
+
+                norm_jid = jid.replace("~02", "").replace("~", "")
+                # Priority 1: Extract complete descriptive freelancer reviews from authentic DB history
+                db_hist = d.get("client_recent_history") or []
+                job_revs = []
+                seen_reviews = set()
+                seen_feedbacks = set()
+                for h in db_hist:
+                    raw_htitle = (h.get("job_title") or "").strip()
+                    if not raw_htitle or "past milestone assignment" in raw_htitle.lower():
+                        continue
+                    htitle = raw_htitle
+                    if htitle.lower().startswith("rating is") or "no feedback" in htitle.lower() or htitle.lower() in ["none", "completed", "n/a"]:
+                        htitle = "Completed Project"
+
+                    date = (h.get("date") or "").strip()
+                    if "present" in date.lower() or "progress" in date.lower():
+                        continue  # Strictly skip in-progress
+                    raw_fb = h.get("feedback") or ""
+                    fl = (h.get("freelancer_name") or "").strip()
+                    if raw_html and (raw_fb.endswith("...") or raw_fb.endswith("…") or "\u2026" in raw_fb):
+                        raw_fb = restore_full_feedback_from_raw(raw_fb, raw_html)
+                    cleaned = clean_freelancer_review(raw_fb, fl)
+                    if not cleaned:
+                        continue  # Strictly skip blank / no feedback
+
+                    dedup_key = (htitle.lower(), cleaned.lower(), fl.lower())
+                    if dedup_key in seen_reviews:
+                        continue
+                    seen_reviews.add(dedup_key)
+
+                    fb_key = cleaned.lower()[:80]
+                    if fb_key in seen_feedbacks:
+                        continue
+                    seen_feedbacks.add(fb_key)
+
+                    job_revs.append({
+                        "job_title": htitle,
+                        "feedback": cleaned,
+                        "rating": h.get("rating") or "5.0",
+                        "date": date,
+                        "amount": h.get("amount") or "",
+                        "freelancer": fl
+                    })
+                    if len(job_revs) >= 25:
+                        break
+
+                # Priority 2: Fallback to CSV if DB had no history
+                if not job_revs:
+                    job_revs = csv_reviews_by_job.get(jid) or csv_reviews_by_job.get(norm_jid) or []
+
+                if require_reviews_only and not job_revs:
+                    continue
+
+                if loc and loc != "Unknown":
+                    if "," in loc:
+                        countries_set.add(loc.split(",")[0].strip())
+                    else:
+                        countries_set.add(loc)
+
+                pv = bool(client_dict.get("payment_verified", True))
+                if pv:
+                    verified_count += 1
+
+                rat_str = str(client_dict.get("rating") or "")
+                try:
+                    val = float(rat_str.split()[0].replace("/5", ""))
+                    if val > 0:
+                        total_stars += val
+                        rating_count += 1
+                except Exception:
+                    pass
+
+                skills_list = job_dict.get("skills") or d.get("skills") or []
+                if isinstance(skills_list, str):
+                    try:
+                        skills_list = json.loads(skills_list)
+                    except Exception:
+                        skills_list = [s.strip() for s in skills_list.split(",") if s.strip()]
+
+                jobs_data.append({
+                    "id": jid,
+                    "title": title,
+                    "url": url,
+                    "posted": posted,
+                    "posted_raw": posted_raw,
+                    "location": loc,
+                    "verified": pv,
+                    "rating": client_dict.get("rating") or "N/A",
+                    "spend": client_dict.get("total_spent") or "N/A",
+                    "jobs_posted": client_dict.get("jobs_posted") or "N/A",
+                    "hire_rate": client_dict.get("hire_rate") or "N/A",
+                    "total_hires": client_dict.get("total_hires") or "N/A",
+                    "active_hires": client_dict.get("active_hires") or "N/A",
+                    "hours_billed": client_dict.get("hours_billed") or "N/A",
+                    "member_since": client_dict.get("member_since") or "N/A",
+                    "client_type": client_dict.get("client_type") or "",
+                    "budget": (d.get("budget_min") and f"${d.get('budget_min')}") or job_dict.get("budget") or "Not Specified",
+                    "budget_type": d.get("job_type") or "Fixed",
+                    "experience": d.get("experience_level") or "Intermediate",
+                    "description": desc,
+                    "skills": skills_list,
+                    "reviews": job_revs,
+                    "total_reviews": len(job_revs),
+                })
+            except Exception:
+                pass
+
+    html_content = render_report_html(jobs_data, countries_set, dates_set, verified_count, total_stars, rating_count, report_title)
 
     out_path = Path(output_html)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1609,7 +1613,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate Standalone HTML Report")
     parser.add_argument("--output", default="./output/upwork_intelligence_report.html", help="Path to output HTML file")
-    parser.add_argument("--db", default="./output/database_14days.db", help="Path to SQLite database")
+    parser.add_argument("--db", default="./output/database.db", help="Path to SQLite database")
     parser.add_argument("--date-start", default=None, help="Start date filter (YYYY-MM-DD)")
     parser.add_argument("--date-end", default=None, help="End date filter (YYYY-MM-DD)")
     parser.add_argument("--title", default=None, help="Custom report title")

@@ -65,8 +65,48 @@ def main():
     oauth.add_argument("--client", required=True)
     oauth.add_argument("--output", required=True)
     commands.add_parser("prepare-update")
+    password = commands.add_parser("set-password")
+    password.add_argument("--username", default="admin")
+    password.add_argument("--env-file", default=".env.local")
+    commands.add_parser("status")
+    commands.add_parser("latest-report")
     args = parser.parse_args()
-    if args.command == "google-login":
+    if args.command == "set-password":
+        import getpass
+        from dotenv import set_key
+        from server.auth import hash_password
+        secret = getpass.getpass("New dashboard password (at least 16 characters): ")
+        confirmation = getpass.getpass("Confirm password: ")
+        if secret != confirmation or len(secret) < 16:
+            raise SystemExit("Passwords must match and contain at least 16 characters")
+        if not args.username.strip() or len(args.username) > 128:
+            raise SystemExit("Choose a username between 1 and 128 characters")
+        path = Path(args.env_file)
+        if not path.exists():
+            path.touch(mode=0o600)
+            if path.name == ".env.local":
+                set_key(str(path), "PUBLIC_URL", "http://localhost:8000")
+                set_key(str(path), "SESSION_COOKIE_SECURE", "false")
+        set_key(str(path), "DASHBOARD_USER", args.username.strip())
+        set_key(str(path), "DASHBOARD_PASSWORD_SCRYPT", hash_password(secret))
+        set_key(str(path), "DASHBOARD_PASSWORD", "")
+        path.chmod(0o600)
+        print("Dashboard credentials saved as a salted password hash. Restart the API to apply them.")
+    elif args.command in ("status", "latest-report"):
+        from server.db import runs
+        settings, db = setup()
+        with db.engine.connect() as c:
+            statement = select(runs).order_by(runs.c.created_at.desc())
+            if args.command == "latest-report":
+                statement = statement.where(runs.c.report != "")
+            run = c.execute(statement.limit(1)).mappings().first()
+        if not run:
+            print("No report ready yet" if args.command == "latest-report" else "No collection runs yet")
+        elif args.command == "latest-report":
+            print(settings.data_dir / "reports" / run["report"])
+        else:
+            print(json.dumps({"window": [run["start_date"], run["end_date"]], "status": run["status"], "counts": db.counts(run["id"])}))
+    elif args.command == "google-login":
         from google_auth_oauthlib.flow import InstalledAppFlow
         flow = InstalledAppFlow.from_client_secrets_file(args.client, ["https://www.googleapis.com/auth/chat.messages"])
         credentials = flow.run_local_server(port=0, open_browser=True, access_type="offline", prompt="consent")

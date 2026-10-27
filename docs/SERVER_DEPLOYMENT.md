@@ -1,78 +1,128 @@
-# Flodata Linux server pipeline
+# Linux deployment
 
-The server entrypoint is `server.app:app`. The legacy `npm start` command and local databases remain available. Do not run the legacy collector and server collector against the same browser profile concurrently.
+Docker runs the API, PostgreSQL 18, a scheduler, two scraper workers, two persistent Chromium sessions and Caddy HTTPS. Only ports 80/443 are public. CDP, PostgreSQL and remote desktops stay internal. Do not run the legacy collector against these browser sessions.
 
-## Architecture
+## Configuration
 
-Docker Compose runs FastAPI, PostgreSQL, one scheduler, one supervisor containing two workers, two isolated Chromium virtual desktops, and Caddy. Browser A and B are reachable internally through their CDP services; the worker names correspond to legacy ports 9222 and 9223. No CDP, VNC, or database ports are published publicly. Only Caddy publishes public ports 80/443. The API additionally binds to host loopback 8000 for diagnostics.
+Use Linux with Docker Engine and Compose v2, initially 4 vCPU and 8 GB RAM. Point a domain at the server. Chromium requires user namespaces; keep its sandbox enabled.
 
-Each worker caps detail attempts at 5–7/minute (default 6). Search navigation has a separate minimum delay. This is not a guarantee of completed throughput or an approved Upwork traffic limit. Account-wide restrictions pause the run. Access challenges are never solved automatically. Complete historical discovery depends on Upwork exposing the relevant postings.
+Prepare the private environment on your laptop:
 
-## First installation
+```sh
+python -m deploy.configure --from-local --domain jobs.yourcompany.com
+python -m deploy.configure --check
+```
 
-1. Provide Ubuntu/Debian Linux, Docker Engine with Compose v2, a domain pointed at the server, and initially 4 vCPU / 8 GB RAM. Verify Chromium's user-namespace sandbox is permitted by the host kernel. Containers use a non-root user and Playwright's seccomp profile; do not add `--no-sandbox` to work around a host restriction.
-2. Clone this repository and copy `.env.server.example` to `.env.server`. Use `chmod 600 .env.server`. Set a random hex `POSTGRES_PASSWORD`, a unique dashboard password of at least 16 characters, your domain/public URL, and your Google Chat webhook and space. Keep the webhook private. Schedule and outbound delivery are disabled initially.
-3. Generate the Caddy hash interactively: `docker run --rm -it caddy:2 caddy hash-password`. Put the hash of the SAME dashboard password into `DASHBOARD_PASSWORD_HASH`, wrapped in single quotes so Compose does not interpolate dollar signs.
-4. `mkdir -p deploy/secrets && sudo chown 10001:10001 deploy/secrets && chmod 700 deploy/secrets`. The application runs as UID 10001. OAuth tokens are refreshed in this writable directory.
-5. Leave `UPWORK_SEARCH_URL` blank to preserve the existing collector's 25-location, payment-verified filter, or supply a custom search URL. Recency sorting and page size are enforced by the browser adapter.
-6. Run `docker compose --env-file .env.server -f compose.server.yml up -d --build`. Check `docker compose --env-file .env.server -f compose.server.yml logs --tail=100`.
-7. Open the HTTPS dashboard. Before launching any collection, open browser A and browser B separately, log in manually, and complete any verification. Persistent profiles remain in separate named volumes. First login may be needed in BOTH profiles. Session validity is checked on navigation; reuse is not a promise of permanent login.
-8. Authorise Google Chat as below, then enable delivery and save the desired daily time/timezone. Default schedule is DISABLED, 07:00 Asia/Kolkata, yesterday only. Validate one small date window before a full daily run.
+This reuses your dashboard scrypt password hash and Google Chat settings, copies the existing OAuth token to `deploy/secrets/google-chat-token.json`, generates a PostgreSQL password if the old value is a placeholder, and removes obsolete configuration fields. It never prints credentials. Review missing-field messages before deploying. Existing configured secrets are retained. Do not regenerate the database password after PostgreSQL has been initialized: changing the env alone does not rotate the database user's password.
 
-Protect remote browser access as account access. The proxy checks dashboard authentication and refuses remote access while workers are active. Pause and wait for both workers to show Waiting, then open the remote view. Opening it holds a persisted remote-control lock. Click Release remote control to disconnect noVNC sessions and release the lock before Resume. Browser restart requests preserve profiles. Never expose ports 9222/9223/5900/6080/7070 to the internet.
+The real `.env.server` and `deploy/secrets` are ignored by Git. Transfer them separately over SSH. Set server permissions:
 
-## Google Chat HTML attachment delivery
+```sh
+chmod 600 .env.server
+sudo chown -R 10001:10001 deploy/secrets
+sudo chmod 700 deploy/secrets
+sudo chmod 600 deploy/secrets/google-chat-token.json
+```
 
-Incoming webhooks send issue/completion messages, not binary attachments. HTML attachments use the Google Chat `media.upload` and message-create API with user OAuth and the `chat.messages` scope (read checks make retries idempotent). Your Workspace administrator must permit the app, webhook and destination space. File size is capped at 200 MB; Workspace file/security policies can still reject an attachment. Failure leaves a downloadable report and a recorded delivery error.
+To set a different dashboard password interactively, use `python -m server.admin set-password --env-file .env.server`. The supported field is `DASHBOARD_PASSWORD_SCRYPT`; the old Caddy `DASHBOARD_PASSWORD_HASH` is unused.
 
-Create a Google Cloud project, enable the Chat API, configure its app and OAuth consent, and download Desktop OAuth client credentials. On your LOCAL computer, install `requirements-server.txt`, then run:
+Local startup reads `.env.local` only. Compose injects `.env.server`, forces `DATABASE_URL=postgresql+psycopg://...@db:5432/flodata`, sets `/data` storage and Linux browser addresses, and disables dotenv file loading. Local paths and SQLite defaults do not leak into containers. To run a host command with server settings explicitly, set `PIPELINE_ENV_FILE=.env.server`; Compose is the recommended server entrypoint.
 
-```powershell
+## Move existing dashboard data
+
+Changing `DATABASE_URL` does not copy SQLite data. The modern dashboard uses `pipeline_*` tables in `output/database.db`. The old `server.admin import-sqlite` command handles legacy `jobs` tables only; do not use it for this migration.
+
+1. Stop collection from the dashboard and wait for both workers to show Waiting. Stop the local launcher after it is idle, so files and database remain aligned during copying. Keep the original local data as a backup.
+2. Export the modern pipeline on the laptop:
+
+```sh
+python -m server.transfer export --source output/database.db --output output/migration/pipeline.json
+```
+
+The export uses SQLite's consistent backup API, including committed WAL data. It copies jobs, history, queue, events, schedule configuration and release records. Dashboard sessions, login limits and worker heartbeats are omitted. No source rows are changed.
+
+3. Copy `output/migration/pipeline.json` and the contents of `output/server` to a private migration directory on Linux, with this structure:
+
+```text
+migration/
+  pipeline.json
+  data/
+    raw/
+    reports/
+    diagnostics/
+```
+
+Preserve the report subdirectories and filenames exactly. If you also have old HTML files directly in `output`, copy those into `migration/data/reports/legacy/` so the Files page can list them. Windows browser profiles are not part of this migration; log into each Linux browser once.
+
+4. Build the server image and start PostgreSQL only:
+
+```sh
+docker compose --env-file .env.server -f compose.server.yml config --quiet
+docker compose --env-file .env.server -f compose.server.yml build
+docker compose --env-file .env.server -f compose.server.yml up -d db
+```
+
+5. Import into the fresh server database before starting the API, scheduler or workers:
+
+```sh
+docker compose --env-file .env.server -f compose.server.yml run --rm -v "$PWD/migration:/imports:ro" api python -m server.transfer import --input /imports/pipeline.json
+```
+
+The importer refuses a populated destination, imports in a transaction, checks row counts and resets PostgreSQL integer sequences. Re-importing cannot silently overwrite server work. Running claims become pending, active runs become paused, manual-control locks are cleared, and daily scheduling and Chat delivery are disabled until you verify the server. Old pending alerts are cancelled to prevent stale notifications. Configured dates/timezone and report paths are preserved.
+
+6. Copy the matching data files into the persistent volume:
+
+```sh
+docker compose --env-file .env.server -f compose.server.yml run --rm --user 0 -v "$PWD/migration/data:/imports:ro" api sh -c 'cp -a /imports/. /data/ && chown -R 10001:10001 /data'
+```
+
+7. Start and verify all services:
+
+```sh
+docker compose --env-file .env.server -f compose.server.yml up -d --wait
+docker compose --env-file .env.server -f compose.server.yml logs --tail=100
+```
+
+Open the HTTPS dashboard, compare saved-job counts and samples with the laptop, and download a migrated HTML file from Files. On Browsers, take control and log into A and B; complete verification manually, then release control. Resume the paused collection. Enable the desired schedule and Chat delivery only after checking the date window, timezone and destination.
+
+For a fresh installation, skip the migration and file-copy steps and start with `up -d --build --wait`.
+
+## Storage and behavior
+
+`postgres18-data` contains the shared database. Each collection is a row; jobs are keyed by job ID, and queue rows preserve membership and snapshots for each collection. There are no new daily database files. `pipeline-data` stores raw HTML, reports and diagnostics. Browser login profiles have separate persistent volumes. PostgreSQL 18 mounts its volume at `/var/lib/postgresql` (data lives under `18/docker`). Do not attach a PostgreSQL 17 data volume to an 18 image; that upgrade requires dump/restore. Ordinary restarts preserve all these volumes. `docker compose down -v` deletes them.
+
+The initial schema is version 2. Future column changes need a versioned migration; SQLAlchemy `create_all` does not alter existing tables. SQLite and PostgreSQL use the same SQLAlchemy schema and dashboard code. PostgreSQL uses row locking and skip-locked queue claims for concurrency.
+
+Speed is adjustable from 1 to 20 detail attempts/minute per worker. Actual completions depend on page and review-history loading. Rate limits respect Retry-After; account restrictions and verification pause work. Neither faster settings nor saved login sessions guarantee uninterrupted access. Remote browser control requires paused, idle workers. Do not scale beyond one supervisor and one scheduler.
+
+A fresh database uses `PIPELINE_TIMEZONE` for its initial schedule timezone. Imported databases retain the user's stored schedule timezone. The scheduler handles yesterday or the configured completed-date window, creates at most one scheduled run per local day, and catches up after restart that day. Missed historical days need an explicit date-window collection.
+
+## Google Chat
+
+Issue messages use `GOOGLE_CHAT_WEBHOOK`; HTML attachments use `GOOGLE_CHAT_SPACE` and `/secrets/google-chat-token.json`. Enable delivery in Schedule after confirming both browser logins. Report names use the collection start timestamp in its timezone: `upwork_Tuesday_scarpe_2026-10-27.html`. Daily releases are automatic when discovery and queued work finish; empty descriptions and jobs without written freelancer reviews are excluded.
+
+To authorize a replacement token on the laptop:
+
+```sh
 python -m server.admin google-login --client path/to/client.json --output path/to/google-chat-token.json
 ```
 
-Complete the consent in your local browser as a member of the target space. Securely copy the resulting token to `deploy/secrets/google-chat-token.json` on the server, owned by UID 10001 and mode 600. Set `GOOGLE_CHAT_SPACE=spaces/...`. Do not commit either credential file. External OAuth apps in testing can have short-lived refresh grants; configure production/internal consent as your organisation permits.
+Copy it into `deploy/secrets` and restore UID 10001 ownership. Existing authorization may be reused if the token remains valid and your Workspace permits the Chat app. Delivery failures retain the downloadable HTML and recorded error; attachment retries are separate from scraping.
 
-The dashboard shows whether webhook and token files are configured. Enable delivery explicitly, run a small collection, and verify both alert and attachment delivery. API delivery retries up to five times, separately from scraping. Alerts also use a persisted outbox with bounded retries; webhook timeouts can occasionally produce duplicate alerts because webhooks do not provide the report API's idempotent message ID. A deterministic message ID prevents duplicate report messages after retries. The operator can retry report delivery from the dashboard.
+## Backups and updates
 
-## Data and migration
+Run `BACKUP_DIR=/encrypted/off-server-backups sh deploy/backup.sh` on a host timer. Back up `pipeline-data` too. Back up browser profiles while their containers are stopped; they contain login credentials. Test restoring dumps into a disposable database. Never restore over active production work.
 
-`postgres-data` stores all job dates centrally. `pipeline-data` stores compressed, content-addressed raw HTML, screenshots and HTML/CSV/JSON reports. `browser-a-data` and `browser-b-data` store login profiles. These volumes survive ordinary container replacements; NEVER use `docker compose down -v` unless intentionally deleting this data.
+GitHub CI tests SQLite and PostgreSQL, validates Compose, and builds the image. The release workflow publishes a commit-SHA image to GHCR. Configure deployment host/user/path and backup variables plus SSH key and verified known-host secrets in GitHub's production environment. Keep credentials out of Git.
 
-The initial SQLAlchemy schema is version 1 and is created when the API starts. Future schema changes require an explicit migration; `create_all` does not upgrade existing tables. Migrate copies of existing SQLite files read-only:
+Use `FLODATA_IMAGE=ghcr.io/owner/repo:COMMIT_SHA` for a tested release. `deploy/update.sh` pauses work, waits for workers, backs up PostgreSQL and updates containers. Verify health and resume from the dashboard afterward. Linux login, TLS and real Chat delivery still require checks on the actual server.
+
+## Verification
+
+Install `requirements-server.lock` to match the image and CI. Run the deployment tests with `TEST_POSTGRES_URL` pointing at a disposable database:
 
 ```sh
-docker compose --env-file .env.server -f compose.server.yml run --rm -v /absolute/path/to/old/output:/imports:ro api python -m server.admin import-sqlite /imports/database.db /imports/database_today.db
+python -m pytest tests/test_server_pipeline.py tests/test_production_flow.py tests/test_deployment_transfer.py tests/test_auto_release.py tests/test_files_cleanup.py tests/test_worker_speed.py tests/test_daily_context.py -q
 ```
 
-Choose all relevant source files. Conflicting imported records are selected by description/review text length, with the source filename recorded. This is a reconciliation heuristic: compare imported counts and sample results before retiring legacy files. Original files are not modified. Import legacy data BEFORE enabling the new worker; importing over fresh production records requires manual review.
-
-## Pipeline behaviour
-
-The scheduler persists the chosen timezone, daily time and window in PostgreSQL. It creates at most one scheduled run per local calendar day after the chosen time. Restarting later that day catches up; this initial version does not automatically backfill every missed historical day. If another run is active, scheduling waits. The supervisor holds a PostgreSQL advisory lock and resets unfinished queue claims after restart. Do not scale the supervisor or scheduler beyond one instance.
-
-Worker A discovers newest-first search pages, and both workers consume unique durable queue entries. The pipeline scans a one-day margin for coarse relative labels, filters detail timestamps in the run timezone, and stops after a fully older search page. Relative timestamps are approximations and are labelled accordingly. Empty/missing date or selector failures pause instead of claiming complete coverage. A safety cap prevents infinite pagination. History expansion is bounded and incomplete/truncated history is flagged in reports; API/DOM changes may require parser updates.
-
-Pause/stop is cooperative: an in-flight bounded browser action can finish before workers become idle. Stop preserves work; Retry can resume failed items. Completed reports are snapshots. Report strings are escaped, and CSV formula-leading cells are neutralised. Remote control must not run concurrently with collection.
-
-Rate limits respect Retry-After and pause both workers. Login/verification errors require manual action. A stalled worker causes the supervisor container to exit for restart; deliberate paused/cooldown states do not cause restart loops. Notifications from the server cannot detect total server/network failure: configure an independent uptime monitor and a missed-daily-report alert externally.
-
-## Backups and restore
-
-Run `BACKUP_DIR=/your/encrypted/backup/path sh deploy/backup.sh` on a host timer. This creates a PostgreSQL custom-format dump. Copy backups OFF the server. Also back up `pipeline-data`; browser profiles contain credentials and need encrypted backups made while their browser containers are stopped. Configure retention on backup storage and periodic pruning of old diagnostic/raw artifacts according to your organisation's needs; this version does not auto-delete collected data.
-
-Test restoring a dump into a disposable PostgreSQL database using `pg_restore --no-owner --no-privileges -U flodata -d RESTORE_DATABASE BACKUP.dump`. Verify row counts and sample exports. Do not restore over the running production database.
-
-## GitHub pipeline and deployment
-
-`server-ci.yml` tests the durable pipeline against SQLite and PostgreSQL, validates Compose, and builds the image on pushes/PRs. `server-release.yml` is manually triggered and publishes a commit-SHA image tag to GHCR. The initial release still requires the Linux browser/login/Chat smoke checks on the target server; unit tests cannot prove access to your account.
-
-Use a tested immutable image tag in `.env.server` (`FLODATA_IMAGE=ghcr.io/owner/repo:COMMIT_SHA`). Authenticate the server to GHCR if the package is private. `deploy/update.sh` pauses work, waits for idle workers, creates a database backup, changes the image tag, pulls and applies services, and waits for health. Verify browser login and resume from the dashboard. Roll back the image tag only if its database schema remains compatible.
-
-For controlled deployment from GitHub, configure a `production` environment with variables `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `BACKUP_DIR`, and secrets `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` (verified SSH host keys, not blindly scanned during deployment). Configure required reviewers there if your organisation requires them. Install the tracked deployment scripts on the host first. Manually run `Deploy server release` with a full commit SHA already published by the release workflow. This workflow remains inactive until the real server details and credentials are configured. No server login or credentials are committed.
-
-## Local verification
-
-Use a virtual environment and `pip install -r requirements-server.txt`. Run `python -m pytest tests/test_server_pipeline.py -q`. Set `TEST_POSTGRES_URL` to a DISPOSABLE PostgreSQL database to exercise database concurrency. Tests never log into Upwork or send Google Chat messages.
-
-The browser seccomp profile is sourced from https://github.com/microsoft/playwright/blob/main/utils/docker/seccomp_profile.json. Refresh it only alongside a reviewed browser/runtime update.
+Tests use temporary data and do not log into Upwork or send real Chat messages. Keep database credentials out of copied logs and command history.
